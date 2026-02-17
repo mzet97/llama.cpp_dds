@@ -564,6 +564,10 @@ struct common_params {
 
     float slot_prompt_similarity = 0.1f;
 
+    // DDS params
+    bool enable_dds = false;        // enable DDS transport
+    int32_t dds_domain = 0;         // DDS domain ID
+
     // batched-bench params
     bool is_pp_shared   = false;
     bool is_tg_separate = false;

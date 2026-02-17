@@ -7,8 +7,18 @@
 #include "llama.h"
 #include "log.h"
 
+#if defined(LLAMA_DDS)
+#include "dds/dds_bridge.h"
+#include "server-queue.h"
+#include "server-task.h"
+#include "nlohmann/json_fwd.hpp"
+#include "nlohmann/json.hpp"
+#endif
+
 #include <atomic>
+#include <chrono>
 #include <exception>
+#include <vector>
 #include <signal.h>
 #include <thread> // for std::thread::hardware_concurrency
 
@@ -18,6 +28,280 @@
 
 static std::function<void(int)> shutdown_handler;
 static std::atomic_flag is_terminating = ATOMIC_FLAG_INIT;
+
+#if defined(LLAMA_DDS)
+// Forward declaration of server context for accessing params
+struct server_context;
+
+// Convert DDS request to JSON for task creation
+static nlohmann::json dds_request_to_json(
+    const llama_dds::ChatCompletionRequest& dds_req,
+    const std::string& model_name
+) {
+    nlohmann::json data = nlohmann::json::object();
+
+    // Model
+    if (!dds_req.model.empty()) {
+        data["model"] = dds_req.model;
+    } else {
+        data["model"] = model_name;
+    }
+
+    // Messages (for chat completion)
+    if (!dds_req.messages.empty()) {
+        nlohmann::json messages = nlohmann::json::array();
+        for (const auto& msg : dds_req.messages) {
+            messages.push_back({
+                {"role", msg.role},
+                {"content", msg.content}
+            });
+        }
+        data["messages"] = messages;
+    }
+
+    // Sampling parameters
+    if (dds_req.temperature > 0) {
+        data["temperature"] = dds_req.temperature;
+    }
+    if (dds_req.top_p && *dds_req.top_p > 0 && *dds_req.top_p < 1.0) {
+        data["top_p"] = *dds_req.top_p;
+    }
+    if (dds_req.max_tokens > 0) {
+        data["max_tokens"] = dds_req.max_tokens;
+        data["n_predict"] = dds_req.max_tokens;
+    }
+    if (dds_req.stop && !dds_req.stop->empty()) {
+        data["stop"] = *dds_req.stop;
+    }
+
+    // Stream
+    data["stream"] = dds_req.stream;
+
+    return data;
+}
+
+// Helper function to convert DDS request to server task and process it
+static void process_dds_request(
+    llama_dds::DDSBridge* dds_bridge,
+    const llama_dds::ChatCompletionRequest& dds_req,
+    struct server_queue* queue_tasks,
+    struct server_response* queue_results,
+    const struct llama_vocab* vocab,
+    const std::string& model_name,
+    void* params_base_ptr
+) {
+    (void)queue_results;
+    (void)params_base_ptr;
+
+    LOG_INF("[DDS] Processing request: %s\n", dds_req.request_id.c_str());
+
+    // Convert DDS request to JSON
+    nlohmann::json data = dds_request_to_json(dds_req, model_name);
+
+    LOG_INF("[DDS] Request JSON: %s\n", data.dump(2).c_str());
+
+    // Build prompt from messages using proper chat format for Phi models
+    // The model uses <|user|>, <|assistant|>, <|end|> tokens
+    std::string prompt;
+    for (const auto& msg : dds_req.messages) {
+        if (msg.role == "system") {
+            prompt += "<|system|>\n" + msg.content + "<|end|>\n";
+        } else if (msg.role == "user") {
+            prompt += "<|user|>\n" + msg.content + "<|end|>\n";
+        } else if (msg.role == "assistant") {
+            prompt += "<|assistant|>\n" + msg.content + "<|end|>\n";
+        }
+    }
+    // Add assistant prefix to prompt for generation
+    prompt += "<|assistant|>\n";
+
+    LOG_INF("[DDS] Prompt: %s\n", prompt.substr(0, 100).c_str());
+
+    // Tokenize the prompt
+    llama_tokens tokens;
+    int n_tokens = -llama_tokenize(vocab, prompt.c_str(), prompt.size(), nullptr, 0, true, true);
+    if (n_tokens < 0) {
+        LOG_ERR("[DDS] Failed to get token count: %d\n", n_tokens);
+        // Send error response
+        llama_dds::ChatCompletionResponse resp;
+        resp.request_id = dds_req.request_id;
+        resp.model = dds_req.model.empty() ? model_name : dds_req.model;
+        resp.content = "[DDS] Error: Failed to tokenize prompt";
+        resp.is_final = true;
+        resp.finish_reason = "error";
+        dds_bridge->send_response(resp);
+        return;
+    }
+
+    tokens.resize(n_tokens);
+    int tokenize_result = llama_tokenize(vocab, prompt.c_str(), prompt.size(), tokens.data(), tokens.size(), true, true);
+    if (tokenize_result != n_tokens) {
+        LOG_ERR("[DDS] Tokenization failed: %d vs %d\n", tokenize_result, n_tokens);
+        llama_dds::ChatCompletionResponse resp;
+        resp.request_id = dds_req.request_id;
+        resp.model = dds_req.model.empty() ? model_name : dds_req.model;
+        resp.content = "[DDS] Error: Tokenization failed";
+        resp.is_final = true;
+        resp.finish_reason = "error";
+        dds_bridge->send_response(resp);
+        return;
+    }
+
+    LOG_INF("[DDS] Tokenized to %d tokens\n", n_tokens);
+
+    // Create a task
+    server_task task(SERVER_TASK_TYPE_COMPLETION);
+    task.id = queue_tasks->get_new_id();
+
+    // Set up task tokens using server_tokens
+    task.tokens = server_tokens(tokens, false);
+
+    // Set up basic task params
+    task.params.n_predict = dds_req.max_tokens > 0 ? dds_req.max_tokens : 50;
+    task.params.sampling.temp = dds_req.temperature > 0 ? dds_req.temperature : 0.7f;
+
+    LOG_INF("[DDS] Posting task to queue, id=%d, tokens=%zu\n", task.id, task.tokens.size());
+
+    // Add task ID to waiting list before posting
+    queue_results->add_waiting_task_id(task.id);
+
+    // Post the task to the queue
+    queue_tasks->post(std::move(task));
+
+    // Wait for the result using the proper queue mechanism
+    LOG_INF("[DDS] Waiting for result...\n");
+
+    std::string generated_text;
+    int prompt_tokens = 0;
+    int completion_tokens = 0;
+    std::string finish_reason = "stop";
+
+    // Keep receiving results until we get a final one or timeout
+    auto start_wait = std::chrono::steady_clock::now();
+    bool is_final = false;
+    int result_count = 0;
+
+    while (!is_final) {
+        // Check timeout
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start_wait).count();
+        if (elapsed > 60) {
+            LOG_WRN("[DDS] Timeout waiting for final result\n");
+            break;
+        }
+
+        // Wait for result with a short timeout
+        auto result = queue_results->recv_with_timeout({task.id}, 5);
+        result_count++;
+
+        if (result == nullptr) {
+            // Timeout, continue waiting
+            LOG_INF("[DDS] Timeout waiting (attempt %d)\n", result_count);
+            continue;
+        }
+
+        LOG_INF("[DDS] Got result #%d\n", result_count);
+
+        // Check if it's a final completion result
+        auto* cmpl_final = dynamic_cast<server_task_result_cmpl_final*>(result.get());
+        if (cmpl_final != nullptr) {
+            generated_text = cmpl_final->content;
+            prompt_tokens = cmpl_final->n_prompt_tokens;
+            completion_tokens = cmpl_final->n_decoded;
+
+            // Determine finish reason
+            switch (cmpl_final->stop) {
+                case STOP_TYPE_EOS:
+                    finish_reason = "stop";
+                    break;
+                case STOP_TYPE_LIMIT:
+                    finish_reason = "length";
+                    break;
+                case STOP_TYPE_WORD:
+                case STOP_TYPE_NONE:
+                default:
+                    finish_reason = "stop";
+                    break;
+            }
+
+            LOG_INF("[DDS] Got FINAL completion result: %zu chars, %d prompt tokens, %d completion tokens\n",
+                    generated_text.size(), prompt_tokens, completion_tokens);
+            is_final = true;
+        } else {
+            // Check for partial completion result
+            auto* cmpl_partial = dynamic_cast<server_task_result_cmpl_partial*>(result.get());
+            if (cmpl_partial != nullptr) {
+                // Accumulate partial content (append new content to existing)
+                generated_text += cmpl_partial->content;
+                prompt_tokens = cmpl_partial->n_prompt_tokens;
+                completion_tokens = cmpl_partial->n_decoded;
+
+                LOG_INF("[DDS] Got partial: %zu chars (is_progress=%d, n_decoded=%d)\n",
+                        generated_text.size(), cmpl_partial->is_progress, cmpl_partial->n_decoded);
+
+                // For non-streaming, keep accumulating until we get final result
+                // Only exit early if is_progress is false AND we've received a reasonable amount
+                // But better to wait for the actual final result
+                if (!cmpl_partial->is_progress && cmpl_partial->n_decoded >= dds_req.max_tokens) {
+                    finish_reason = "stop";
+                    LOG_INF("[DDS] Received full completion (%d tokens), considering final\n", cmpl_partial->n_decoded);
+                    is_final = true;
+                }
+            } else {
+                // Check for error result
+                auto* error_result = dynamic_cast<server_task_result_error*>(result.get());
+                if (error_result != nullptr) {
+                    generated_text = "[Error: " + error_result->err_msg + "]";
+                    finish_reason = "error";
+                    LOG_ERR("[DDS] Task error: %s\n", error_result->err_msg.c_str());
+                    is_final = true;
+                }
+            }
+        }
+    }
+
+    LOG_INF("[DDS] Got result, sending response\n");
+
+    // Send the response with generated content
+    llama_dds::ChatCompletionResponse resp;
+    resp.request_id = dds_req.request_id;
+    resp.model = dds_req.model.empty() ? model_name : dds_req.model;
+    resp.content = generated_text;
+    resp.is_final = true;
+    resp.finish_reason = finish_reason;
+    resp.prompt_tokens = prompt_tokens;
+    resp.completion_tokens = completion_tokens;
+
+    dds_bridge->send_response(resp);
+
+    LOG_INF("[DDS] Response sent for request: %s\n", dds_req.request_id.c_str());
+}
+
+// DDS polling thread function
+static void dds_poll_loop(
+    llama_dds::DDSBridge* dds_bridge,
+    struct server_queue* queue_tasks,
+    struct server_response* queue_results,
+    const struct llama_vocab* vocab,
+    std::atomic<bool>* running,
+    const std::string& model_name,
+    void* params_base_ptr
+) {
+    LOG_INF("[DDS] Polling thread started\n");
+
+    while (running->load()) {
+        llama_dds::ChatCompletionRequest req;
+        // Atomic pop - returns false if empty
+        if (dds_bridge->pop_pending_request(req)) {
+            process_dds_request(dds_bridge, req, queue_tasks, queue_results, vocab, model_name, params_base_ptr);
+        }
+        // Reduced from 100ms to 1ms for lower latency
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    LOG_INF("[DDS] Polling thread stopped\n");
+}
+#endif
 
 static inline void signal_handler(int signal) {
     if (is_terminating.test_and_set()) {
@@ -113,6 +397,35 @@ int main(int argc, char ** argv) {
         LOG_ERR("%s: failed to initialize HTTP server\n", __func__);
         return 1;
     }
+
+#if defined(LLAMA_DDS)
+    std::unique_ptr<llama_dds::DDSBridge> dds_bridge;
+    std::thread dds_poll_thread;
+    std::atomic<bool> dds_running{false};
+
+    if (params.enable_dds) {
+        LOG_INF("%s: initializing DDS transport on domain %d\n", __func__, params.dds_domain);
+        dds_bridge = std::make_unique<llama_dds::DDSBridge>(params.dds_domain);
+        if (!dds_bridge->init()) {
+            LOG_ERR("%s: failed to initialize DDS bridge\n", __func__);
+            return 1;
+        }
+        // Set up callback to queue DDS requests for processing
+        dds_bridge->set_process_callback([](const llama_dds::ChatCompletionRequest& request) {
+            // Request is queued internally by DDSBridge
+            LOG_INF("DDS request queued: model=%s, request_id=%s\n",
+                    request.model.c_str(), request.request_id.c_str());
+        });
+        if (!dds_bridge->start()) {
+            LOG_ERR("%s: failed to start DDS bridge\n", __func__);
+            return 1;
+        }
+
+        // Start DDS polling thread after server is ready
+        dds_running = true;
+        LOG_INF("%s: DDS transport enabled on domain %d\n", __func__, params.dds_domain);
+    }
+#endif
 
     //
     // Router
@@ -226,6 +539,22 @@ int main(int argc, char ** argv) {
             ctx_http.stop();
         };
 
+#if defined(LLAMA_DDS)
+        // Start DDS polling thread for router mode (no model needed)
+        if (dds_bridge && dds_running.load()) {
+            std::string model_name = "router";
+            dds_poll_thread = std::thread(dds_poll_loop,
+                dds_bridge.get(),
+                &ctx_server.get_queue(),
+                &ctx_server.get_response_queue(),
+                ctx_server.get_vocab(),
+                &dds_running,
+                model_name,
+                nullptr);
+            LOG_INF("%s: DDS polling thread started (router mode)\n", __func__);
+        }
+#endif
+
     } else {
         // setup clean up function, to be called before exit
         clean_up = [&ctx_http, &ctx_server]() {
@@ -258,6 +587,24 @@ int main(int argc, char ** argv) {
         ctx_http.is_ready.store(true);
 
         LOG_INF("%s: model loaded\n", __func__);
+
+#if defined(LLAMA_DDS)
+        // Start DDS polling thread after model is loaded
+        if (dds_bridge && dds_running.load()) {
+            // Get model name from params (fallback to param value)
+            std::string model_name = params.model.name.empty() ? "unknown" : params.model.name;
+
+            dds_poll_thread = std::thread(dds_poll_loop,
+                dds_bridge.get(),
+                &ctx_server.get_queue(),
+                &ctx_server.get_response_queue(),
+                ctx_server.get_vocab(),
+                &dds_running,
+                model_name,
+                nullptr); // params_base - would need to be passed properly
+            LOG_INF("%s: DDS polling thread started\n", __func__);
+        }
+#endif
 
         shutdown_handler = [&](int) {
             // this will unblock start_loop()
@@ -303,6 +650,18 @@ int main(int argc, char ** argv) {
 
         // this call blocks the main thread until queue_tasks.terminate() is called
         ctx_server.start_loop();
+
+#if defined(LLAMA_DDS)
+        // Stop DDS polling thread
+        if (dds_bridge) {
+            dds_running = false;
+            if (dds_poll_thread.joinable()) {
+                dds_poll_thread.join();
+            }
+            dds_bridge->stop();
+            LOG_INF("%s: DDS polling thread stopped\n", __func__);
+        }
+#endif
 
         clean_up();
         if (ctx_http.thread.joinable()) {

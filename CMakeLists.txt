@@ -114,6 +114,7 @@ option(LLAMA_TESTS_INSTALL  "llama: install tests"        ON)
 # 3rd party libs
 option(LLAMA_OPENSSL    "llama: use openssl to support HTTPS" ON)
 option(LLAMA_LLGUIDANCE "llama-common: include LLGuidance library for structured output in common utils" OFF)
+option(LLAMA_DDS "llama: enable DDS (CycloneDDS) transport support" OFF)
 
 
 # Required for relocatable CMake package
@@ -214,6 +215,10 @@ if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TOOLS)
     add_subdirectory(tools)
 endif()
 
+if (LLAMA_DDS)
+    add_subdirectory(dds)
+endif()
+
 # Automatically add all files from the 'licenses' directory
 file(GLOB EXTRA_LICENSES "${CMAKE_SOURCE_DIR}/licenses/LICENSE-*")
 
@@ -266,7 +271,7 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/llama-config.cmake
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/llama)
 
 install(
-    FILES convert_hf_to_gguf.py
+    FILES scripts/convert_hf_to_gguf.py
     PERMISSIONS
         OWNER_READ
         OWNER_WRITE

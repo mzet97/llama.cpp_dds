@@ -2914,6 +2914,18 @@ server_context_meta server_context::get_meta() const {
     };
 }
 
+// DDS bridge accessor methods
+struct server_queue & server_context::get_queue() {
+    return impl->queue_tasks;
+}
+
+struct server_response & server_context::get_response_queue() {
+    return impl->queue_results;
+}
+
+const struct llama_vocab * server_context::get_vocab() const {
+    return impl->vocab;
+}
 
 
 // generator-like API for HTTP response generation

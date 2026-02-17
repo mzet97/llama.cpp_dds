@@ -2782,6 +2782,24 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.port = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_PORT"));
+
+    // DDS options
+    add_opt(common_arg(
+        {"--enable-dds"},
+        {"--disable-dds"},
+        "enable DDS (CycloneDDS) transport",
+        [](common_params & params, bool value) {
+            params.enable_dds = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_ENABLE_DDS"));
+    add_opt(common_arg(
+        {"--dds-domain"}, "DOMAIN",
+        "DDS domain ID (default: 0)",
+        [](common_params & params, int value) {
+            params.dds_domain = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_DDS_DOMAIN"));
+
     add_opt(common_arg(
         {"--path"}, "PATH",
         string_format("path to serve static files from (default: %s)", params.public_path.c_str()),

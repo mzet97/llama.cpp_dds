@@ -59,6 +59,11 @@ target_include_directories(${TARGET} PRIVATE ../mtmd)
 target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})
 target_link_libraries(${TARGET} PRIVATE server-context PUBLIC common cpp-httplib ${CMAKE_THREAD_LIBS_INIT})
 
+if (LLAMA_DDS)
+    target_link_libraries(${TARGET} PRIVATE llama-dds)
+    target_compile_definitions(${TARGET} PRIVATE LLAMA_DDS=1)
+endif()
+
 if (WIN32)
     TARGET_LINK_LIBRARIES(${TARGET} PRIVATE ws2_32)
 endif()

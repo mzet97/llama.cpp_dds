@@ -66,6 +66,12 @@ struct server_context {
     // get server metadata (read-only), can only be called after load_model()
     // not thread-safe, should only be used from the main thread
     server_context_meta get_meta() const;
+
+    // get queue access for DDS bridge
+    // not thread-safe, should only be used from the main thread
+    struct server_queue & get_queue();
+    struct server_response & get_response_queue();
+    const struct llama_vocab * get_vocab() const;
 };
 
 

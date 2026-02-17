@@ -136,5 +136,13 @@ poetry.toml
 # IDE
 /*.code-workspace
 /.windsurf/
+/.trae/
+/.claude/
+/.serena/
+
+# DDS
+/dds/results/
+/build-wsl/
+
 # emscripten
 a.out.*

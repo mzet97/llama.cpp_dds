@@ -287,6 +287,7 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 | [IBM zDNN](docs/backend/zDNN.md) | IBM Z & LinuxONE |
 | [WebGPU [In Progress]](docs/build.md#webgpu) | All |
 | [RPC](https://github.com/ggml-org/llama.cpp/tree/master/tools/rpc) | All |
+| [DDS (CycloneDDS)](dds/README.md) | All (Distributed) |
 | [Hexagon [In Progress]](docs/backend/hexagon/README.md) | Snapdragon |
 | [VirtGPU](docs/backend/VirtGPU.md) | VirtGPU APIR |
 
@@ -590,3 +591,4 @@ $ echo "source ~/.llama-completion.bash" >> ~/.bashrc
 - [nlohmann/json](https://github.com/nlohmann/json) - Single-header JSON library, used by various tools/examples - MIT License
 - [miniaudio.h](https://github.com/mackron/miniaudio) - Single-header audio format decoder, used by multimodal subsystem - Public domain
 - [subprocess.h](https://github.com/sheredom/subprocess.h) - Single-header process launching solution for C and C++ - Public domain
+- [CycloneDDS](https://github.com/eclipse-cyclonedds/cyclonedds) - DDS implementation for distributed inference (optional) - Eclipse Public License 2.0

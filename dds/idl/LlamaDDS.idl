@@ -1,0 +1,61 @@
+// Llama DDS IDL - Data types for DDS communication
+// This file defines the message types for llama.cpp DDS transport
+
+module llama {
+
+    // Chat message structure
+    struct ChatMessage {
+        string role;       // "system", "user", "assistant"
+        string content;    // Message content
+    };
+
+    // Chat completion request (maps to OpenAI API)
+    struct ChatCompletionRequest {
+        string request_id;           // Unique UUID for correlation
+        string model;                // Model name
+        sequence<ChatMessage> messages;  // Chat messages
+        float temperature;           // Sampling temperature (default 0.7)
+        long max_tokens;             // Max tokens to generate
+        boolean stream;              // Enable streaming mode
+
+        // Optional parameters
+        sequence<float> top_p;       // Nucleus sampling (optional)
+        sequence<long> n;             // Number of completions (optional)
+        sequence<string> stop;       // Stop sequences (optional)
+    };
+
+    // Chat completion response (each chunk for streaming)
+    struct ChatCompletionResponse {
+        string request_id;           // Correlates with request
+        string model;                // Model name
+        string content;              // Generated text
+        string finish_reason;        // "stop", "length", null
+        boolean is_final;           // Last chunk?
+        long prompt_tokens;          // Tokens in prompt
+        long completion_tokens;      // Tokens generated
+    };
+
+    // Server status/health
+    struct ServerStatus {
+        string server_id;            // Unique server identifier
+        long slots_idle;            // Number of idle slots
+        long slots_processing;      // Number of processing slots
+        string model_loaded;        // Currently loaded model
+        boolean ready;              // Server ready for requests
+    };
+
+    // Embedding request
+    struct EmbeddingRequest {
+        string request_id;
+        string model;
+        string input;               // Text to embed
+    };
+
+    // Embedding response
+    struct EmbeddingResponse {
+        string request_id;
+        string model;
+        sequence<float> embedding;   // Generated embedding vector
+        long tokens;                // Number of tokens
+    };
+};
