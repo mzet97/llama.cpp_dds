@@ -1,19 +1,26 @@
 cmake_minimum_required(VERSION 3.16)
 project(llama-dds)
 
-# CycloneDDS installation path (local build)
-set(CYCLONEDDS_INSTALL_PREFIX "/home/zet/cyclonedds/install")
+# M1: CycloneDDS path is now configurable.
+# Usage: cmake -DCYCLONEDDS_ROOT=/path/to/install ...
+# Falls back to system packages (e.g. apt-installed cyclonedds-dev on Debian/Ubuntu,
+# or a vcpkg-installed package on Windows).
+if (DEFINED CYCLONEDDS_ROOT)
+    list(APPEND CMAKE_PREFIX_PATH "${CYCLONEDDS_ROOT}")
+    message(STATUS "[DDS] Using CYCLONEDDS_ROOT: ${CYCLONEDDS_ROOT}")
+elseif (DEFINED ENV{CYCLONEDDS_ROOT})
+    list(APPEND CMAKE_PREFIX_PATH "$ENV{CYCLONEDDS_ROOT}")
+    message(STATUS "[DDS] Using CYCLONEDDS_ROOT from environment: $ENV{CYCLONEDDS_ROOT}")
+endif()
 
-# Find CycloneDDS
-find_package(CycloneDDS QUIET PATHS "${CYCLONEDDS_INSTALL_PREFIX}" NO_DEFAULT_PATH)
-find_package(CycloneDDS-CXX QUIET PATHS "${CYCLONEDDS_INSTALL_PREFIX}" NO_DEFAULT_PATH)
+# Find CycloneDDS (system paths + any prefixes added above)
+find_package(CycloneDDS QUIET)
+find_package(CycloneDDS-CXX QUIET)
 
 if (NOT CycloneDDS_FOUND OR NOT CycloneDDS-CXX_FOUND)
     message(STATUS "CycloneDDS not found, DDS support will be disabled")
     return()
 endif()
-
-message(STATUS "CycloneDDS found at: ${CYCLONEDDS_INSTALL_PREFIX}")
 
 message(STATUS "CycloneDDS found: ${CycloneDDS_CONFIG}")
 
@@ -44,7 +51,6 @@ target_include_directories(llama-dds PRIVATE
     ${CMAKE_SOURCE_DIR}/ggml/include
     ${CMAKE_SOURCE_DIR}/ggml/src
     ${CycloneDDS_INCLUDE_DIRS}
-    ${CYCLONEDDS_INSTALL_PREFIX}/include
 )
 
 target_link_libraries(llama-dds PUBLIC

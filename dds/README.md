@@ -23,10 +23,10 @@ This module provides **DDS (Data Distribution Service)** transport support using
 
 ## Building
 
-To build `llama.cpp` with DDS support, enable the `LLAMA_DDS` option:
+### Linux / WSL (Ubuntu)
 
 ```bash
-# 1. Install dependencies (Ubuntu/WSL)
+# 1. Install CycloneDDS
 ./dds/scripts/install_dds.sh
 
 # 2. Configure and Build
@@ -34,13 +34,57 @@ cmake -B build -DLLAMA_DDS=ON
 cmake --build build -j$(nproc)
 ```
 
+The script installs CycloneDDS from source to `~/cyclonedds/install`. If you have an existing installation, set `CYCLONEDDS_ROOT`:
+
+```bash
+cmake -B build -DLLAMA_DDS=ON -DCYCLONEDDS_ROOT=/path/to/cyclonedds/install
+cmake --build build -j$(nproc)
+```
+
+### Windows (vcpkg)
+
+```powershell
+# 1. Install CycloneDDS via vcpkg
+vcpkg install cyclonedds:x64-windows
+vcpkg integrate install
+
+# 2. Configure and Build
+cmake -B build -DLLAMA_DDS=ON `
+      -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+cmake --build build --config Release -j
+```
+
+### macOS (Homebrew)
+
+```bash
+# 1. Install CycloneDDS
+brew install cyclonedds
+
+# 2. Configure and Build
+cmake -B build -DLLAMA_DDS=ON
+cmake --build build -j$(sysctl -n hw.logicalcpu)
+```
+
+### CMake Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `LLAMA_DDS` | Enable DDS transport | `OFF` |
+| `CYCLONEDDS_ROOT` | CycloneDDS install prefix (overrides env var) | auto-detected |
+| `CYCLONEDDS_ROOT` env | Alternative to CMake variable | — |
+
 ## Usage
 
 ### 1. Start the Server
 Run the server enabling the DDS transport. It will listen on both HTTP (8080) and DDS (Domain 0).
 
 ```bash
-./build/bin/llama-server --enable-dds --model models/your-model.gguf --port 8080
+./build/bin/llama-server \
+    --enable-dds \
+    --model models/your-model.gguf \
+    --port 8080 \
+    --dds-domain 0 \
+    --dds-timeout 120    # seconds, default 60
 ```
 
 ### 2. Run Benchmarks

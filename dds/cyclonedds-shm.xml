@@ -3,8 +3,8 @@
 <!-- Optimized for local communication with llama.cpp server -->
 <!-- Using CycloneDDS v0.11.0 format -->
 
-<cyclonedds xmlns="https://cdds.io/config" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-    xsi:schemaLocation="https://cdds.io/config https://raw.githubusercontent.com/eclipse-cycloneds/cyclonedds/master/etc/cyclonedds.xsd">
+<cyclonedds xmlns="https://cdds.io/config"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="https://cdds.io/config https://raw.githubusercontent.com/eclipse-cyclonedds/cyclonedds/master/etc/cyclonedds.xsd">
 
     <!-- Domain 0 - same as server -->
     <domain id="0">

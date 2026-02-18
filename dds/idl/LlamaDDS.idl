@@ -44,6 +44,12 @@ module llama {
         boolean ready;              // Server ready for requests
     };
 
+    // M6: Embedding types are defined here for future use but NOT yet wired up.
+    // There is no topic, reader, writer, or handler for them.
+    // To implement: add embedding topic in DDSTransport, a reader/writer pair,
+    // and a handler in DDSBridge/server.cpp (similar to ChatCompletion).
+    // To remove: delete these structs and regenerate with: idlc LlamaDDS.idl
+
     // Embedding request
     struct EmbeddingRequest {
         string request_id;
