@@ -1,7 +1,7 @@
 #include "dds_transport.h"
 
 #include "dds_idl_wrapper.h"
-#include "dds_utils.h"  // M4: shared, thread-safe UUID generator
+#include "dds_utils.h"  // shared, thread-safe UUID generator
 
 #include <dds/dds.h>
 #include <dds/ddsc/dds_public_error.h>
@@ -19,7 +19,7 @@ static const char * TOPIC_REQUEST  = "llama_chat_completion_request";
 static const char * TOPIC_RESPONSE = "llama_chat_completion_response";
 static const char * TOPIC_STATUS   = "llama_server_status";
 
-// M4/M5: generate_uuid now lives in dds_utils.h
+// generate_request_id wraps the shared UUID generator from dds_utils.h.
 static std::string generate_request_id() {
     return llama_dds::generate_uuid();
 }
@@ -84,8 +84,8 @@ class DDSTransportImpl {
                 return false;
             }
 
-            // M7: Status is published periodically — BEST_EFFORT + VOLATILE avoids
-            // accumulating history in the DDS broker for every 5s heartbeat.
+            // NOTE: Status is published periodically — BEST_EFFORT + VOLATILE avoids
+            // accumulating stale history in the DDS broker for every heartbeat.
             dds_qos_t * status_qos = dds_create_qos();
             dds_qset_reliability(status_qos, DDS_RELIABILITY_BEST_EFFORT, 0);
             dds_qset_durability(status_qos, DDS_DURABILITY_VOLATILE);
@@ -150,7 +150,7 @@ class DDSTransportImpl {
 
         auto         data = to_llama_response(response);
         dds_return_t ret  = dds_write(response_writer_, &data);
-        free_llama_response(data);  // C1: free strdup'd strings after write
+        free_llama_response(data);  // free strdup'd strings after dds_write
         if (ret != DDS_RETCODE_OK) {
             fprintf(stderr, "[DDS] Error sending response: %d\n", ret);
         }
@@ -165,7 +165,7 @@ class DDSTransportImpl {
 
         auto data = to_llama_status(status);
         dds_write(status_writer_, &data);
-        free_llama_status(data);  // C2: free strdup'd strings after write
+        free_llama_status(data);  // free strdup'd strings after dds_write
     }
 
     //
@@ -202,7 +202,7 @@ class DDSTransportImpl {
 
             dds_delete_qos(qos);
 
-            // Best-effort for status (matches M7 server QoS)
+            // Best-effort for status (matches server QoS on the status topic)
             dds_qos_t * status_qos = dds_create_qos();
             dds_qset_reliability(status_qos, DDS_RELIABILITY_BEST_EFFORT, 0);
             dds_qset_durability(status_qos, DDS_DURABILITY_VOLATILE);
@@ -403,8 +403,8 @@ class DDSTransportImpl {
     std::thread response_reader_thread_;  // client response loop (A1)
 
     llama_dds::DDSTransport::RequestCallback  request_callback_;
-    llama_dds::DDSTransport::ResponseCallback response_callback_;  // A1
-    llama_dds::DDSTransport::StatusCallback   status_callback_;    // A1
+    llama_dds::DDSTransport::ResponseCallback response_callback_;  // client mode
+    llama_dds::DDSTransport::StatusCallback   status_callback_;    // client mode
 };
 
 // DDSTransport implementation
@@ -435,7 +435,6 @@ void DDSTransport::publish_status(const llama_dds::ServerStatus & status) {
 }
 
 bool DDSTransport::start_client() {
-    // A1: delegate to DDSTransportImpl
     is_server_ = false;
     running_   = true;
     return pimpl_->start_client(response_callback_, status_callback_);
@@ -447,7 +446,6 @@ void DDSTransport::stop_client() {
 }
 
 void DDSTransport::send_request(const llama_dds::ChatCompletionRequest & request) {
-    // A1: publish to DDS request topic
     pimpl_->send_request(request);
 }
 

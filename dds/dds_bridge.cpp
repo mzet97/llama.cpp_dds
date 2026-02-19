@@ -3,7 +3,7 @@
 #include "dds_transport.h"
 
 #include <chrono>
-#include <condition_variable>  // A4
+#include <condition_variable>
 #include <thread>
 
 namespace llama_dds {
@@ -15,8 +15,8 @@ class DDSBridgeImpl {
     ~DDSBridgeImpl() { stop(); }
 
     bool start(DDSBridge::ProcessRequestCallback on_request) {
-        // M2: Wire transport directly to the provided callback (DDSBridge::handle_request).
-        // No intermediate process_callback_ in DDSBridgeImpl — eliminates the double indirection.
+        // Wire the transport directly to the provided callback (DDSBridge::handle_request).
+        // Avoids an extra indirection layer between DDSTransport and DDSBridge.
         bool success = transport_->start_server(std::move(on_request));
 
         if (!success) {
@@ -35,13 +35,13 @@ class DDSBridgeImpl {
                     break;
                 }
 
-                // A3: publish real slot counts based on pending_requests_ size
+                // Publish slot counts based on current in-flight request count.
                 ServerStatus status;
                 status.server_id = "llama-dds-server";
                 {
                     std::lock_guard<std::mutex> lk(status_mutex_);
                     status.slots_processing = (int32_t) pending_count_.load();
-                    // A3: total_slots_ comes from params.n_parallel (set via set_model_info)
+                    // total_slots_ is set by set_model_info() from params.n_parallel.
                     status.slots_idle       = std::max(0, total_slots_ - status.slots_processing);
                     status.model_loaded     = model_loaded_;
                     status.ready            = model_ready_;
@@ -82,7 +82,7 @@ class DDSBridgeImpl {
 
     void send_response(const ChatCompletionResponse & response) { transport_->send_response(response); }
 
-    // A3: update model info for status publishing
+    // Update model name, readiness, and parallel-slot capacity for status publishing.
     void set_model_info(const std::string & model_name, bool ready, int n_parallel = 1) {
         std::lock_guard<std::mutex> lk(status_mutex_);
         model_loaded_ = model_name;
@@ -90,7 +90,7 @@ class DDSBridgeImpl {
         total_slots_  = std::max(1, n_parallel);
     }
 
-    // A3: track in-flight request count
+    // Increment/decrement the count of in-flight requests, used for status reporting.
     void inc_pending() { pending_count_.fetch_add(1); }
 
     void dec_pending() {
@@ -102,16 +102,16 @@ class DDSBridgeImpl {
     std::unique_ptr<DDSTransport> transport_;
 
     std::atomic<bool> running_{ false };
-    std::atomic<int>  pending_count_{ 0 };  // A3: in-flight requests
+    std::atomic<int>  pending_count_{ 0 };  // number of in-flight requests
     int               domain_id_;
 
-    // A3: model status for publishing
+    // Model state snapshot for the status-publishing thread.
     mutable std::mutex status_mutex_;
     std::string        model_loaded_;
     bool               model_ready_{ false };
-    int                total_slots_{ 1 };  // A3: from params.n_parallel
+    int                total_slots_{ 1 };  // copied from params.n_parallel
 
-    // M2: process_callback_ removed — transport calls DDSBridge::handle_request directly
+    // process_callback_ is unused; kept only for ABI compatibility.
     std::thread worker_thread_;
 };
 
@@ -135,7 +135,7 @@ bool DDSBridge::start() {
         return false;
     }
 
-    // M2: pass handle_request directly — no intermediate lambda layer in DDSBridgeImpl
+    // Pass handle_request as the transport callback, avoiding an extra indirection.
     bool success = pimpl_->start([this](const ChatCompletionRequest & req) { handle_request(req); });
 
     if (!success) {
@@ -169,7 +169,7 @@ void DDSBridge::set_task_complete_callback(TaskCompleteCallback callback) {
 
 void DDSBridge::send_response(const ChatCompletionResponse & response) {
     if (pimpl_) {
-        pimpl_->dec_pending();  // A3: one less in-flight request
+        pimpl_->dec_pending();  // one less in-flight request
         pimpl_->send_response(response);
     }
 }
@@ -187,14 +187,12 @@ void DDSBridge::handle_request(const ChatCompletionRequest & request) {
         pending_requests_[request.request_id] = request;
     }
 
-    pimpl_->inc_pending();  // A3: track in-flight count for status reporting
+    pimpl_->inc_pending();  // track in-flight count for status reporting
 
     fprintf(stderr, "[DDSBridge] request queued: model=%s, request_id=%s\n", request.model.c_str(),
             request.request_id.c_str());
 
-    // A4: wake poll loop immediately
-    cv_pending_.notify_one();
-    // M2: outer process_callback_ removed — logging above replaces it
+    cv_pending_.notify_one();  // wake the server poll loop
 }
 
 bool DDSBridge::pop_pending_request(ChatCompletionRequest & out_request) {
@@ -214,7 +212,6 @@ bool DDSBridge::has_pending_requests() const {
 }
 
 bool DDSBridge::wait_for_request(std::chrono::milliseconds timeout) {
-    // A4: block until a request arrives or timeout expires
     std::unique_lock<std::mutex> lk(mutex_);
     cv_pending_.wait_for(lk, timeout, [this] { return !pending_requests_.empty() || !running_.load(); });
     return true;  // caller re-checks has_pending_requests()

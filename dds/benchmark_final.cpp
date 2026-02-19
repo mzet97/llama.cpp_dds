@@ -5,7 +5,7 @@
 
 #include "dds/dds.h"
 #include "dds_idl_wrapper.h"  // For cleanup helper
-#include "dds_utils.h"        // M4/M5: shared thread-safe UUID generator
+#include "dds_utils.h"        // shared thread-safe UUID generator
 #include "idl/LlamaDDS.h"
 
 #include <algorithm>
@@ -22,8 +22,6 @@
 static const char * TOPIC_REQUEST  = "llama_chat_completion_request";
 static const char * TOPIC_RESPONSE = "llama_chat_completion_response";
 
-// M4: removed local generate_uuid() — use llama_dds::generate_uuid() from dds_utils.h
-
 struct PromptTest {
     const char * name;
     const char * prompt;
@@ -34,13 +32,13 @@ PromptTest PROMPTS[] = {
     { "medium",  "Explain machine learning in a few sentences." },
     { "complex",
      "Write a detailed technical explanation of how neural networks work, including backpropagation, gradient "
-     "descent, and the role of activation functions."           }
+      "descent, and the role of activation functions."          }
 };
 
 std::vector<double> run_test(dds_entity_t writer, dds_entity_t reader, const char * prompt, int num_tests) {
     std::vector<double> latencies;
 
-    // A6: Create WaitSet once, reuse across iterations
+    // Create WaitSet once and reuse across iterations to avoid per-call allocation overhead.
     dds_entity_t ws = dds_create_waitset(dds_get_participant(reader));
     dds_waitset_attach(ws, reader, DDS_DATA_AVAILABLE_STATUS);
     dds_attach_t ws_results[1];
@@ -74,7 +72,7 @@ std::vector<double> run_test(dds_entity_t writer, dds_entity_t reader, const cha
             dds_return_t rc = dds_waitset_wait(ws, ws_results, 1, DDS_SECS(30));
 
             if (rc > 0) {
-                // A5: Use loan-based read — zero-copy, DDS manages memory
+                // NOTE: Loan-based read — zero-copy; DDS owns and frees the sample memory.
                 void *            samples[1] = { nullptr };
                 dds_sample_info_t infos[1];
 
@@ -90,7 +88,7 @@ std::vector<double> run_test(dds_entity_t writer, dds_entity_t reader, const cha
                     }
                 }
 
-                // A5: Return loan — DDS frees all internal strings correctly
+                // Return loan so DDS can reclaim the internal string buffers.
                 if (n > 0) {
                     dds_return_loan(reader, samples, n);
                 }
@@ -107,8 +105,7 @@ std::vector<double> run_test(dds_entity_t writer, dds_entity_t reader, const cha
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
-    // A6: Delete WaitSet after loop
-    dds_delete(ws);
+    dds_delete(ws);  // delete the WaitSet after the loop
 
     return latencies;
 }

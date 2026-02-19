@@ -2,7 +2,7 @@
 
 #include "dds_transport.h"
 
-#include <condition_variable>  // A4
+#include <condition_variable>
 #include <functional>
 #include <map>
 #include <memory>
@@ -22,6 +22,32 @@ using TaskCompleteCallback = std::function<void(const std::string &             
 // Forward declaration
 class DDSBridgeImpl;
 
+/// Adapter between the DDS transport layer and the llama.cpp server loop.
+///
+/// Threading model
+/// ---------------
+/// The bridge owns two threads:
+///   1. DDSTransport reader thread — calls handle_request() when a DDS message
+///      arrives.  handle_request() is internal; never call it directly.
+///   2. Status-publishing worker thread — periodically writes a ServerStatus
+///      heartbeat to the DDS domain.
+///
+/// The server’s main loop communicates with the bridge through three
+/// thread-safe polling helpers: pop_pending_request(), wait_for_request(),
+/// and has_pending_requests().  No external locking is required.
+///
+/// Lifecycle
+/// ---------
+///   DDSBridge bridge;
+///   bridge.init();
+///   bridge.set_model_info(model_name, /*ready=*/true, n_parallel);
+///   bridge.start();
+///   while (running) {
+///       bridge.wait_for_request(100ms);
+///       ChatCompletionRequest req;
+///       if (bridge.pop_pending_request(req)) { /* process */ }
+///   }
+///   bridge.stop();
 class DDSBridge {
   public:
     DDSBridge(int domain_id = 0);
@@ -32,8 +58,6 @@ class DDSBridge {
 
     // Set callback for processing requests (called from server)
     using ProcessRequestCallback = std::function<void(const ChatCompletionRequest &)>;
-    // M2: Deprecated — requests are now routed directly through handle_request().
-    //     Kept for ABI compatibility but has no effect.
     [[deprecated("requests are queued via handle_request; no callback needed")]] void set_process_callback(
         ProcessRequestCallback callback);
 
@@ -43,7 +67,7 @@ class DDSBridge {
     // Stop the DDS bridge
     void stop();
 
-    // A3: set model info used by periodic status publishing
+    /// Set model info used by the periodic status-publishing thread.
     void set_model_info(const std::string & model_name, bool ready, int n_parallel = 1);
 
     // Update server status (call periodically or on state change)
@@ -65,15 +89,19 @@ class DDSBridge {
     // Send a response (called by server after processing)
     void send_response(const ChatCompletionResponse & response);
 
-    // Get pending requests (called from server main loop to avoid threading issues)
-    // Returns true if a request was popped
+    /// Pop one request from the pending queue.
+    /// Thread-safe: may be called from any thread concurrently with handle_request().
+    /// Returns true and fills @p out_request when a request is available;
+    /// returns false immediately when the queue is empty.
     bool pop_pending_request(ChatCompletionRequest & out_request);
 
-    // A4: Block until at least one request arrives or timeout expires.
-    // Returns true if a request may be available (spurious wake-ups are OK).
+    /// Block the calling thread until at least one request is queued or @p timeout
+    /// expires.  Spurious wake-ups are possible; always re-check has_pending_requests().
+    /// Thread-safe: may be called from the server main loop while the DDS reader
+    /// thread enqueues requests.
     bool wait_for_request(std::chrono::milliseconds timeout);
 
-    // Check if there are pending requests
+    /// Returns true if at least one request is pending.  Thread-safe.
     bool has_pending_requests() const;
 
   private:
@@ -86,11 +114,11 @@ class DDSBridge {
     std::atomic<bool> initialized_{ false };
 
     TaskCompleteCallback   task_complete_callback_;
-    // M2: process_callback_ no longer used — kept for ABI compat only
+    // Kept for ABI compatibility with set_process_callback(); has no effect.
     ProcessRequestCallback process_callback_;
 
     mutable std::mutex                           mutex_;
-    std::condition_variable                      cv_pending_;  // A4: notified when a request arrives
+    std::condition_variable                      cv_pending_;  // notified by handle_request() on every enqueue
     std::map<std::string, ChatCompletionRequest> pending_requests_;
 };
 

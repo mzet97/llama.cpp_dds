@@ -13,14 +13,12 @@
 // Include CycloneDDS
 #include "dds/dds.h"
 #include "dds_idl_wrapper.h"  // For cleanup helper
-#include "dds_utils.h"        // M4/M5: shared thread-safe UUID generator
+#include "dds_utils.h"        // shared thread-safe UUID generator
 #include "idl/LlamaDDS.h"
 
 // Topics
 static const char * TOPIC_REQUEST  = "llama_chat_completion_request";
 static const char * TOPIC_RESPONSE = "llama_chat_completion_response";
-
-// M4: removed local generate_uuid() — use llama_dds::generate_uuid() from dds_utils.h
 
 int main(int argc, char * argv[]) {
     int domain_id = 0;
@@ -134,7 +132,7 @@ int main(int argc, char * argv[]) {
     dds_return_t rc = dds_waitset_wait(ws, ws_results, 1, DDS_SECS(30));
 
     if (rc > 0) {
-        // A5: use loan-based read so DDS manages internal string memory
+        // Use loan-based read: DDS manages internal string memory; return loan when done.
         void *            samples[1] = { nullptr };
         dds_sample_info_t infos[1];
         int               n = dds_take(response_reader, samples, infos, 1, 1);

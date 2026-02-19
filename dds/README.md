@@ -3,10 +3,11 @@
 This module provides **DDS (Data Distribution Service)** transport support using [Eclipse CycloneDDS](https://github.com/eclipse-cyclonedds/cyclonedds), enabling high-performance, distributed, and real-time communication for `llama.cpp` inference.
 
 ## Key Features
-- **Low Latency**: ~20% faster than HTTP for small payloads (validated in benchmarks).
-- **Interoperability**: Standard IDL-based communication compatible with ROS 2 and other DDS systems.
-- **Zero-Copy**: Optimized data path using DDS loan mechanisms.
-- **Reliability**: Configurable QoS profiles for reliable or best-effort delivery.
+- **Low Mean Latency**: 10–25% lower mean latency than HTTP across all prompt sizes (see [benchmarks](#performance-results)).
+- **Low Median Latency**: Up to 45% faster at the median (p50) for short prompts, where transport overhead dominates.
+- **Interoperability**: Standard IDL-based communication compatible with ROS 2 and other DDS ecosystems.
+- **Zero-Copy**: Optimised data path using the DDS loan API; avoids redundant copies on the hot path.
+- **Configurable Reliability**: QoS profiles for reliable delivery (requests/responses) and best-effort heartbeats (status topic).
 
 ## Directory Structure
 - `idl/`: DDS Interface Definition Language files (`LlamaDDS.idl`).
@@ -103,12 +104,56 @@ This script will:
 
 ## Performance Results
 
-Benchmarks run on WSL 2 (TinyLlama-1.1B):
+### Environment
 
-| Prompt Type | DDS Latency (ms) | HTTP Latency (ms) | Improvement |
-|-------------|------------------|-------------------|-------------|
-| Simple      | **172.55**       | 214.57            | **+19.6%**  |
-| Medium      | 545.73           | 540.90            | ~0%         |
-| Complex     | 558.26           | 549.61            | ~0%         |
+- **Platform**: WSL 2 (Ubuntu 22.04 on Windows 11)
+- **Model**: TinyLlama-1.1B (GGUF, CPU inference)
+- **DDS client**: `benchmark_final` (C++, CycloneDDS)
+- **HTTP client**: `benchmark_http.py` (Python, `requests`)
+- **Runs per prompt type**: 10
+- **Results directory**: `results/` (raw CSV) and `results/plots_new/` (figures)
 
-*Note: DDS excels in low-latency control scenarios. For heavy generation tasks, GPU inference time dominates the total latency.*
+### Mean latency
+
+| Prompt type | DDS mean ± σ (ms) | HTTP mean ± σ (ms) | Mean improvement |
+|-------------|-------------------|--------------------|------------------|
+| Simple      | **112.0 ± 121.4** | 149.7 ± 14.4       | **+25.2 %**      |
+| Medium      | **457.5 ± 125.3** | 526.9 ± 14.4       | **+13.2 %**      |
+| Complex     | **471.6 ± 27.2**  | 525.0 ± 20.1       | **+10.2 %**      |
+
+### Percentile latency (p50 / p95)
+
+| Prompt type | DDS p50 (ms) | DDS p95 (ms) | HTTP p50 (ms) | HTTP p95 (ms) |
+|-------------|--------------|--------------|---------------|---------------|
+| Simple      | **79.1**     | 458.4        | 145.1         | **188.2**     |
+| Medium      | **482.5**    | 619.3        | 523.3         | **550.8**     |
+| Complex     | **472.7**    | **514.8**    | 525.1         | 556.5         |
+
+### Interpretation
+
+**DDS consistently wins at the median.** For simple prompts the median is 45% lower than HTTP
+(79 ms vs 145 ms), confirming that removing the HTTP framing overhead is significant when the
+inference itself is fast.
+
+**DDS has higher tail latency for short and medium prompts.** The p95 for simple prompts
+(458 ms) is roughly 2.4× worse than HTTP (188 ms). The wide standard deviation (±121 ms vs
+±14 ms) suggests a bimodal distribution — most requests complete quickly, but a minority hit a
+colder DDS path (e.g. participant discovery, OS scheduling jitter). For long-running inference
+(complex prompts) DDS is better at both mean and p95, because the transport overhead becomes
+negligible relative to generation time.
+
+**Takeaway**: DDS is the better choice when median latency matters (real-time control loops,
+streaming pipelines) and the workload is dominated by inference time. HTTP provides more
+predictable tail latency for latency-SLA-sensitive deployments with short prompts.
+
+### Plots (`results/plots_new/`)
+
+| File | Description |
+|------|-------------|
+| `latency_mean.png` | Mean latency bar chart: DDS vs HTTP per prompt type |
+| `latency_percentiles.png` | p50 / p95 / p99 grouped bar chart |
+| `speedup.png` | DDS-over-HTTP speedup factor per prompt type |
+| `jitter.png` | Standard deviation comparison (DDS jitter vs HTTP) |
+| `summary.png` | Combined summary panel |
+
+> Previous run results and figures are preserved in `results/plots/` for reference.

@@ -1,9 +1,6 @@
 #pragma once
 
-// dds_utils.h — shared utilities for DDS components
-// M4: single definition, replaces copy-pasted versions in dds_transport.cpp,
-//     test_client.cpp and benchmark_final.cpp.
-// M5: uses thread_local to eliminate data races on the PRNG state.
+// dds_utils.h — shared utilities for DDS components.
 
 #include <cstdint>
 #include <cstdio>
@@ -15,7 +12,8 @@ namespace llama_dds {
 /// Generate a UUID v4 string (e.g. "550e8400-e29b-41d4-a716-446655440000").
 /// Thread-safe: each thread owns its own RNG state (thread_local).
 inline std::string generate_uuid() {
-    // M5: thread_local avoids shared mutable state across threads
+    // NOTE: thread_local gives each thread its own PRNG state, avoiding locks
+    //       and data races with no cost to the hot path.
     thread_local std::mt19937                            gen(std::random_device{}());
     thread_local std::uniform_int_distribution<uint32_t> dis;
 
