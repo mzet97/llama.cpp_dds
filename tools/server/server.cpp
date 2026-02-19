@@ -200,8 +200,9 @@ static void process_dds_request(llama_dds::DDSBridge *                   dds_bri
             break;
         }
 
-        // Wait for result with a short timeout
-        auto result = queue_results->recv_with_timeout({ task_id }, 5);
+        // Wait for result with a short timeout (1s — minimum granularity of
+        // recv_with_timeout which takes int seconds)
+        auto result = queue_results->recv_with_timeout({ task_id }, 1);
         result_count++;
 
         if (result == nullptr) {
@@ -331,15 +332,33 @@ static void dds_poll_loop(llama_dds::DDSBridge *      dds_bridge,
 ) {
     LOG_INF("[DDS] Polling thread started\n");
 
+    // Track in-flight worker count so we can drain at shutdown.
+    std::atomic<int> in_flight{ 0 };
+
     while (running->load()) {
-        // A4: block until a request arrives or 100ms elapses — avoids 1000 wakeups/s idle
-        dds_bridge->wait_for_request(std::chrono::milliseconds(100));
+        // Block until a request arrives or 50ms elapses.
+        dds_bridge->wait_for_request(std::chrono::milliseconds(50));
 
         llama_dds::ChatCompletionRequest req;
-        // Atomic pop - returns false if empty
-        if (dds_bridge->pop_pending_request(req)) {
-            process_dds_request(dds_bridge, req, queue_tasks, queue_results, vocab, model_name, meta, params_base);
+        // Drain all queued requests, dispatching each to its own detached thread
+        // so inference runs concurrently — mirrors the HTTP server threading model.
+        while (dds_bridge->pop_pending_request(req)) {
+            in_flight.fetch_add(1);
+            std::thread(
+                [dds_bridge, queue_tasks, queue_results, vocab, &model_name, meta, params_base,
+                 &in_flight](llama_dds::ChatCompletionRequest r) {
+                    process_dds_request(dds_bridge, r, queue_tasks, queue_results, vocab, model_name, meta,
+                                        params_base);
+                    in_flight.fetch_sub(1);
+                },
+                std::move(req))
+                .detach();
         }
+    }
+
+    // Wait for in-flight requests to complete before exiting.
+    while (in_flight.load() > 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 
     LOG_INF("[DDS] Polling thread stopped\n");

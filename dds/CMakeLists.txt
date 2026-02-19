@@ -80,3 +80,13 @@ add_executable(benchmark_final benchmark_final.cpp)
 target_link_libraries(benchmark_final PRIVATE llama-dds CycloneDDS::ddsc)
 target_include_directories(benchmark_final PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_SOURCE_DIR})
 
+# B1: Multi-Client Benchmark
+add_executable(benchmark_multi_dds benchmark_multi_dds.cpp)
+target_link_libraries(benchmark_multi_dds PRIVATE llama-dds CycloneDDS::ddsc)
+target_include_directories(benchmark_multi_dds PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_SOURCE_DIR})
+
+# B2: Streaming Benchmark
+add_executable(benchmark_stream_dds benchmark_stream_dds.cpp)
+target_link_libraries(benchmark_stream_dds PRIVATE llama-dds CycloneDDS::ddsc)
+target_include_directories(benchmark_stream_dds PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_SOURCE_DIR})
+

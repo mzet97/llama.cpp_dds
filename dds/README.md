@@ -1,159 +1,151 @@
 # DDS Support for llama.cpp
 
-This module provides **DDS (Data Distribution Service)** transport support using [Eclipse CycloneDDS](https://github.com/eclipse-cyclonedds/cyclonedds), enabling high-performance, distributed, and real-time communication for `llama.cpp` inference.
+This module provides **DDS (Data Distribution Service)** transport support using [Eclipse CycloneDDS](https://github.com/eclipse-cyclonedds/cyclonedds), enabling distributed, real-time communication for `llama.cpp` inference.
+
+> For the full technical reference (architecture, QoS, IDL, configuration, troubleshooting), see [docs/dds.md](../docs/dds.md).
 
 ## Key Features
-- **Low Mean Latency**: 10–25% lower mean latency than HTTP across all prompt sizes (see [benchmarks](#performance-results)).
-- **Low Median Latency**: Up to 45% faster at the median (p50) for short prompts, where transport overhead dominates.
-- **Interoperability**: Standard IDL-based communication compatible with ROS 2 and other DDS ecosystems.
-- **Zero-Copy**: Optimised data path using the DDS loan API; avoids redundant copies on the hot path.
-- **Configurable Reliability**: QoS profiles for reliable delivery (requests/responses) and best-effort heartbeats (status topic).
 
-## Directory Structure
-- `idl/`: DDS Interface Definition Language files (`LlamaDDS.idl`).
-- `scripts/`: Helper scripts for building, installing dependencies, and testing.
-- `results/`: Benchmark logs, CSV results, and performance plots.
-- `benchmark_final.cpp`: C++ benchmarking tool for DDS latency measurement.
-- `dds_transport.cpp`: Core transport implementation.
+- **Alternative to HTTP** — binary CDR over UDP replaces REST/JSON over TCP; no per-request handshake.
+- **Streaming** — token-by-token responses via `is_final` flag, mapping to OpenAI SSE semantics.
+- **Concurrent inference** — detached thread per request with `atomic<int>` in-flight counter.
+- **Built-in discovery** — SPDP/SEDP auto-match readers and writers; no URL configuration.
+- **Interoperability** — standard IDL-based types compatible with ROS 2 and other DDS ecosystems.
+- **Configurable QoS** — RELIABLE + TRANSIENT_LOCAL for requests/responses; BEST_EFFORT for status.
 
-## Requirements
+## Quick Start
 
-- **CMake** >= 3.16
-- **CycloneDDS** >= 0.10.0
-- **CycloneDDS C++ Binding** (cyclonedds-cxx)
-
-## Building
-
-### Linux / WSL (Ubuntu)
+### 1. Build CycloneDDS
 
 ```bash
-# 1. Install CycloneDDS
-./dds/scripts/install_dds.sh
+git clone https://github.com/eclipse-cyclonedds/cyclonedds.git ~/cyclonedds
+cd ~/cyclonedds && mkdir build && cd build
+cmake .. -DCMAKE_INSTALL_PREFIX=~/cyclonedds/install -DCMAKE_BUILD_TYPE=Release
+cmake --build . --target install -j$(nproc)
+```
 
-# 2. Configure and Build
-cmake -B build -DLLAMA_DDS=ON
+### 2. Build llama.cpp with DDS
+
+```bash
+cmake -B build -DLLAMA_DDS=ON \
+      -DCMAKE_PREFIX_PATH=~/cyclonedds/install \
+      -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j$(nproc)
 ```
 
-The script installs CycloneDDS from source to `~/cyclonedds/install`. If you have an existing installation, set `CYCLONEDDS_ROOT`:
+For GPU acceleration, add `-DGGML_HIP=ON` (AMD) or `-DGGML_CUDA=ON` (NVIDIA).
 
-```bash
-cmake -B build -DLLAMA_DDS=ON -DCYCLONEDDS_ROOT=/path/to/cyclonedds/install
-cmake --build build -j$(nproc)
-```
+See also: [Windows (vcpkg)](../docs/dds.md#windows-vcpkg) | [macOS (Homebrew)](../docs/dds.md#macos-homebrew)
 
-### Windows (vcpkg)
-
-```powershell
-# 1. Install CycloneDDS via vcpkg
-vcpkg install cyclonedds:x64-windows
-vcpkg integrate install
-
-# 2. Configure and Build
-cmake -B build -DLLAMA_DDS=ON `
-      -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
-cmake --build build --config Release -j
-```
-
-### macOS (Homebrew)
-
-```bash
-# 1. Install CycloneDDS
-brew install cyclonedds
-
-# 2. Configure and Build
-cmake -B build -DLLAMA_DDS=ON
-cmake --build build -j$(sysctl -n hw.logicalcpu)
-```
-
-### CMake Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `LLAMA_DDS` | Enable DDS transport | `OFF` |
-| `CYCLONEDDS_ROOT` | CycloneDDS install prefix (overrides env var) | auto-detected |
-| `CYCLONEDDS_ROOT` env | Alternative to CMake variable | — |
-
-## Usage
-
-### 1. Start the Server
-Run the server enabling the DDS transport. It will listen on both HTTP (8080) and DDS (Domain 0).
+### 3. Run the Server
 
 ```bash
 ./build/bin/llama-server \
     --enable-dds \
     --model models/your-model.gguf \
     --port 8080 \
-    --dds-domain 0 \
-    --dds-timeout 120    # seconds, default 60
+    -ngl 99
 ```
 
-### 2. Run Benchmarks
-We provide a comprehensive benchmark suite comparing DDS vs HTTP:
+The server listens on **both** HTTP (port 8080) and DDS (domain 0).
+
+### 4. Test
 
 ```bash
-# Run full benchmark suite (DDS C++ client vs HTTP Python client)
-./dds/run_benchmarks_wsl.sh
+./build/bin/test_client 0 "What is 2+2?"
 ```
 
-This script will:
-1. Start the server.
-2. Run `benchmark_final` (DDS).
-3. Run `benchmark_http.py` (HTTP).
-4. Generate comparison plots in `dds/results/plots/`.
+## Benchmark Suite
+
+Three scenarios evaluate DDS vs HTTP under different conditions:
+
+| Scenario | Script | What it measures |
+|----------|--------|-----------------|
+| **B1** Multi-client | `run_benchmarks_multi.sh` | Throughput + tail latency with 1/2/4/8 concurrent clients |
+| **B2** Streaming | `run_benchmarks_stream.sh` | Time-To-First-Token (TTFT) and Inter-Token Latency (ITL) |
+| **B3** Network delay | `run_benchmarks_network.sh` | Impact of network latency via `tc netem` |
+
+```bash
+# Example: run B1 with 5 iterations
+./dds/run_benchmarks_multi.sh 5 dds/results/multi tinyllama
+```
+
+### Methodology
+
+- **UUID matching** per request (prevents TRANSIENT_LOCAL cross-contamination)
+- **Warmup** excluded from measurements
+- **Bessel's correction** for standard deviation
+- **Active discovery** via `dds_get_matched_subscriptions()` before timing
 
 ## Performance Results
 
-### Environment
+**Environment**: Ryzen 9 5900X · RX 7900 XTX (ROCm 6.4.2, `-ngl 99`) · WSL 2 (Ubuntu 24.04) · TinyLlama 1.1B Q4_K_M · CycloneDDS 0.11.0
 
-- **Platform**: WSL 2 (Ubuntu 22.04 on Windows 11)
-- **Model**: TinyLlama-1.1B (GGUF, CPU inference)
-- **DDS client**: `benchmark_final` (C++, CycloneDDS)
-- **HTTP client**: `benchmark_http.py` (Python, `requests`)
-- **Runs per prompt type**: 10
-- **Results directory**: `results/` (raw CSV) and `results/plots_new/` (figures)
+### Localhost (N=20)
 
-### Mean latency
+| Prompt | DDS p50 (ms) | HTTP p50 (ms) | Δ |
+|--------|-------------|--------------|---|
+| simple | 29.5 | 29.1 | +1.4% |
+| medium | 102.8 | 100.4 | +2.4% |
+| complex | 96.5 | 92.7 | +4.0% |
 
-| Prompt type | DDS mean ± σ (ms) | HTTP mean ± σ (ms) | Mean improvement |
-|-------------|-------------------|--------------------|------------------|
-| Simple      | **112.0 ± 121.4** | 149.7 ± 14.4       | **+25.2 %**      |
-| Medium      | **457.5 ± 125.3** | 526.9 ± 14.4       | **+13.2 %**      |
-| Complex     | **471.6 ± 27.2**  | 525.0 ± 20.1       | **+10.2 %**      |
+On localhost with GPU inference, **DDS ≈ HTTP**. The bottleneck is model inference, not transport.
 
-### Percentile latency (p50 / p95)
+### With 2 ms Network Delay (N=5, `tc netem`)
 
-| Prompt type | DDS p50 (ms) | DDS p95 (ms) | HTTP p50 (ms) | HTTP p95 (ms) |
-|-------------|--------------|--------------|---------------|---------------|
-| Simple      | **79.1**     | 458.4        | 145.1         | **188.2**     |
-| Medium      | **482.5**    | 619.3        | 523.3         | **550.8**     |
-| Complex     | **472.7**    | **514.8**    | 525.1         | 556.5         |
+| Metric | DDS | HTTP | Δ |
+|--------|-----|------|---|
+| simple p50 | 31.8 ms | 43.1 ms | **−26%** |
+| medium p50 | 104.5 ms | 107.7 ms | −3% |
+| stream TTFT (complex) | 20.2 ms | 23.7 ms | **−15%** |
+| stream ITL (complex) | 3.2 ms | 3.1 ms | ≈parity |
 
-### Interpretation
+**DDS wins when transport overhead matters** — short prompts and network delay expose HTTP's per-request TCP handshake cost. For long inference, both transports converge.
 
-**DDS consistently wins at the median.** For simple prompts the median is 45% lower than HTTP
-(79 ms vs 145 ms), confirming that removing the HTTP framing overhead is significant when the
-inference itself is fast.
+### Plots
 
-**DDS has higher tail latency for short and medium prompts.** The p95 for simple prompts
-(458 ms) is roughly 2.4× worse than HTTP (188 ms). The wide standard deviation (±121 ms vs
-±14 ms) suggests a bimodal distribution — most requests complete quickly, but a minority hit a
-colder DDS path (e.g. participant discovery, OS scheduling jitter). For long-running inference
-(complex prompts) DDS is better at both mean and p95, because the transport overhead becomes
-negligible relative to generation time.
+| Scenario | Directory |
+|----------|-----------|
+| Single-client | `results/plots_new/` |
+| B1 Multi-client | `results/multi/plots/` |
+| B2 Streaming | `results/stream/plots/` |
+| B3 Network delay | `results/network/plots_netem_*ms/` |
 
-**Takeaway**: DDS is the better choice when median latency matters (real-time control loops,
-streaming pipelines) and the workload is dominated by inference time. HTTP provides more
-predictable tail latency for latency-SLA-sensitive deployments with short prompts.
+## Directory Structure
 
-### Plots (`results/plots_new/`)
+```
+dds/
+├── idl/
+│   ├── LlamaDDS.idl          # IDL type definitions (source of truth)
+│   ├── LlamaDDS.h             # Generated C types
+│   └── LlamaDDS.c             # Generated C serialisation
+├── dds_transport.cpp/h        # DDSTransport: participant, topics, read loop
+├── dds_bridge.cpp/h           # DDSBridge: thread-safe queue, send_response
+├── dds_types.h                # C++ type definitions
+├── dds_idl_wrapper.h          # C++ ↔ IDL C conversion, RAII cleanup
+├── dds_utils.h                # Thread-safe UUID v4 generator
+├── benchmark_final.cpp        # Single-client DDS benchmark
+├── benchmark_multi_dds.cpp    # B1: multi-client concurrent
+├── benchmark_stream_dds.cpp   # B2: streaming (TTFT/ITL)
+├── benchmark_http.py          # Single-client HTTP benchmark
+├── benchmark_multi_http.py    # B1: multi-client HTTP
+├── benchmark_stream_http.py   # B2: streaming HTTP
+├── run_benchmarks_multi.sh    # B1 orchestration
+├── run_benchmarks_stream.sh   # B2 orchestration
+├── run_benchmarks_network.sh  # B3 orchestration (server/client/netem)
+├── plot_benchmarks.py         # Single-client plots
+├── plot_multi_benchmarks.py   # B1 plots
+├── plot_stream_benchmarks.py  # B2 plots
+├── cyclonedds-local.xml       # Localhost config (loopback, no multicast)
+├── cyclonedds-network.xml     # Cross-machine config (multicast enabled)
+├── cyclonedds-shm-iox.xml     # Shared memory (Iceoryx PSMX)
+├── test_client.cpp            # Simple test client
+├── CMakeLists.txt             # Build definitions
+└── results/                   # Benchmark outputs (CSV + plots)
+```
 
-| File | Description |
-|------|-------------|
-| `latency_mean.png` | Mean latency bar chart: DDS vs HTTP per prompt type |
-| `latency_percentiles.png` | p50 / p95 / p99 grouped bar chart |
-| `speedup.png` | DDS-over-HTTP speedup factor per prompt type |
-| `jitter.png` | Standard deviation comparison (DDS jitter vs HTTP) |
-| `summary.png` | Combined summary panel |
+## Further Reading
 
-> Previous run results and figures are preserved in `results/plots/` for reference.
+- [docs/dds.md](../docs/dds.md) — comprehensive technical reference
+- [docs/DDS_QUALITY_REPORT.md](../docs/DDS_QUALITY_REPORT.md) — historical quality audit
+- [CycloneDDS documentation](https://cyclonedds.io/docs/)

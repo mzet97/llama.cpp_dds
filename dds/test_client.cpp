@@ -31,8 +31,16 @@ int main(int argc, char * argv[]) {
         prompt = argv[2];
     }
 
+    // Optional model name via argv[3] (default: phi4-mini)
+    std::string model_name = "phi4-mini";
+    if (argc > 3) {
+        model_name = argv[3];
+    }
+
     std::cout << "=== DDS Client Test ===" << std::endl;
+    std::cout << "Usage: test_client [domain_id] [prompt] [model]" << std::endl;
     std::cout << "Connecting to domain " << domain_id << std::endl;
+    std::cout << "Model: " << model_name << std::endl;
     std::cout << "Prompt: " << prompt << std::endl;
 
     // Create participant
@@ -61,7 +69,7 @@ int main(int argc, char * argv[]) {
     dds_qos_t * qos = dds_create_qos();
     dds_qset_reliability(qos, DDS_RELIABILITY_RELIABLE, DDS_SECS(10));
     dds_qset_durability(qos, DDS_DURABILITY_TRANSIENT_LOCAL);
-    dds_qset_history(qos, DDS_HISTORY_KEEP_LAST, 8);  // Added HISTORY
+    dds_qset_history(qos, DDS_HISTORY_KEEP_LAST, 8);
 
     // Create writer for requests
     dds_entity_t request_writer = dds_create_writer(participant, request_topic, qos, NULL);
@@ -92,7 +100,7 @@ int main(int argc, char * argv[]) {
     memset(&req, 0, sizeof(req));
 
     req.request_id  = dds_string_dup(llama_dds::generate_uuid().c_str());
-    req.model       = dds_string_dup("phi4-mini");
+    req.model       = dds_string_dup(model_name.c_str());
     req.temperature = 0.3f;
     req.max_tokens  = 50;
     req.stream      = false;

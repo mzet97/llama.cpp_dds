@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  CycloneDDS Configuration with Iceoryx Shared Memory (PSMX)
+
+  Bypasses the kernel network stack entirely: data flows via
+  mmap'd shared memory segments managed by the RouDi daemon.
+  Eliminates UDP jitter introduced by WSL2's virtual NIC.
+
+  REQUIREMENTS:
+    - iceoryx v2.x installed (libiceoryx_posh, libiceoryx_hoofs)
+    - iox-roudi daemon running BEFORE any CycloneDDS participant
+    - LD_LIBRARY_PATH includes the directory containing libpsmx_iox.so
+-->
+<CycloneDDS xmlns="https://cdds.io/config"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="https://cdds.io/config https://raw.githubusercontent.com/eclipse-cyclonedds/cyclonedds/master/etc/cyclonedds.xsd">
+
+    <Domain id="any">
+        <General>
+            <!-- Bind to loopback — fallback for DDS discovery -->
+            <Interfaces>
+                <NetworkInterface address="127.0.0.1" />
+                <!-- Iceoryx PSMX plugin: zero-copy shared memory transport.
+             Omit LOCATOR to auto-detect machine ID. -->
+                <PubSubMessageExchange type="iox" library="psmx_iox" config="" priority="default" />
+            </Interfaces>
+            <AllowMulticast>false</AllowMulticast>
+        </General>
+
+        <Discovery>
+            <MaxAutoParticipantIndex>9</MaxAutoParticipantIndex>
+        </Discovery>
+    </Domain>
+</CycloneDDS>

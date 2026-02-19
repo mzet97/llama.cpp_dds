@@ -5,6 +5,11 @@ set -e
 MODEL="models/tinyllama.gguf"
 URL="https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf"
 BUILD_DIR="build-wsl"
+NUM_RUNS="${1:-10}"  # default 10; override with: ./run_benchmarks_wsl.sh <n>
+
+# Optimise CycloneDDS for localhost-only communication.
+# Both server and benchmark_final (client) inherit this via the environment.
+export CYCLONEDDS_URI="file://$PWD/dds/cyclonedds-local.xml"
 
 # 1. Download model if missing
 if [ ! -f "$MODEL" ]; then
@@ -13,9 +18,10 @@ if [ ! -f "$MODEL" ]; then
 fi
 
 # 2. Start Server
-echo "Starting server with DDS enabled..."
+GPU_LAYERS="${2:-0}"  # default 0 (CPU-only); use 99 for full GPU offload
+echo "Starting server with DDS enabled (GPU layers: $GPU_LAYERS)..."
 mkdir -p dds/results
-./$BUILD_DIR/bin/llama-server --enable-dds --model "$MODEL" --port 8080 --ctx-size 512 > dds/results/server.log 2>&1 &
+./$BUILD_DIR/bin/llama-server --enable-dds --model "$MODEL" --port 8080 --ctx-size 512 -ngl "$GPU_LAYERS" > dds/results/server.log 2>&1 &
 SERVER_PID=$!
 
 cleanup() {
@@ -25,11 +31,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Wait for server to be ready
+# Wait for server to be ready via /health endpoint (robust against log format changes)
 echo "Waiting for server to initialize..."
-for i in {1..30}; do
-    if grep -q "HTTP server listening" dds/results/server.log; then
+SERVER_READY=0
+for i in $(seq 1 60); do
+    if curl --silent --fail "http://127.0.0.1:8080/health" > /dev/null 2>&1; then
         echo "Server is ready!"
+        SERVER_READY=1
         break
     fi
     sleep 1
@@ -37,31 +45,42 @@ for i in {1..30}; do
 done
 echo ""
 
-# Verify server is actually running
-if ! ps -p $SERVER_PID > /dev/null; then
-    echo "Server failed to start! Check dds/results/server.log:"
+if [ "$SERVER_READY" -eq 0 ]; then
+    echo "Server failed to start or /health not reachable! Check dds/results/server.log:"
     cat dds/results/server.log
     exit 1
 fi
+
+# Global server warmup: prime model weights, KV-cache allocator and thread pools
+# before any benchmark begins. Avoids cold-start bias in the first prompt.
+echo "Running global server warmup (3 requests discarded)..."
+for i in 1 2 3; do
+    curl --silent --fail \
+         -X POST "http://127.0.0.1:8080/v1/chat/completions" \
+         -H "Content-Type: application/json" \
+         -d '{"model":"tinyllama","messages":[{"role":"user","content":"hi"}],"max_tokens":5,"temperature":0.3,"stream":false}' \
+         > /dev/null 2>&1 || true
+done
+echo "Warmup done. Starting benchmarks..."
 
 # 3. Run DDS Benchmark
 echo "========================================"
 echo "Running DDS Benchmark (C++)"
 echo "========================================"
-./$BUILD_DIR/bin/benchmark_final 5 dds/results/dds_results.csv || echo "DDS Benchmark failed"
+./$BUILD_DIR/bin/benchmark_final "$NUM_RUNS" dds/results/dds_results.csv || echo "DDS Benchmark failed"
 
 # 4. Run HTTP Benchmark
 echo "========================================"
 echo "Running HTTP Benchmark (Python)"
 echo "========================================"
-python3 dds/benchmark_http.py 5 dds/results/http_results.csv || echo "HTTP Benchmark failed"
+python3 dds/benchmark_http.py "$NUM_RUNS" dds/results/http_results.csv || echo "HTTP Benchmark failed"
 
 # 5. Plot Results
 echo "========================================"
 echo "Generating Comparison Plots"
 echo "========================================"
 if [ -f "dds/results/dds_results.csv" ] && [ -f "dds/results/http_results.csv" ]; then
-    python3 dds/plot_benchmarks.py dds/results/dds_results.csv dds/results/http_results.csv dds/results/plots
+    python3 dds/plot_benchmarks.py dds/results/dds_results.csv dds/results/http_results.csv dds/results/plots_new
 else
     echo "Skipping plots: CSV files not found"
 fi

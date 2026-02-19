@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  CycloneDDS Configuration for Low-Latency Local Communication
+  Used by the benchmark suite to minimise UDP overhead when server
+  and client run on the same host / WSL instance.
+
+  Key optimisations:
+    - Localhost-only network interface avoids multicast overhead.
+    - MaxAutoParticipantIndex=9 speeds up SPDP discovery.
+    - Small receive buffer keeps cache-hot.
+    - Whc (Writer History Cache) low/high water marks tuned for
+      single-sample reliable delivery.
+-->
+<CycloneDDS xmlns="https://cdds.io/config"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="https://cdds.io/config https://raw.githubusercontent.com/eclipse-cyclonedds/cyclonedds/master/etc/cyclonedds.xsd">
+
+    <Domain id="any">
+        <General>
+            <!-- Bind to loopback only — avoids multicast / NIC enumeration. -->
+            <Interfaces>
+                <NetworkInterface address="127.0.0.1" />
+            </Interfaces>
+            <AllowMulticast>false</AllowMulticast>
+        </General>
+
+        <Discovery>
+            <MaxAutoParticipantIndex>9</MaxAutoParticipantIndex>
+        </Discovery>
+
+        <Internal>
+            <!-- Aggressive heartbeat → faster RELIABLE ack round-trip on loopback. -->
+            <HeartbeatInterval>10ms</HeartbeatInterval>
+            <!-- Don't linger after write; deliver immediately. -->
+            <WriterLingerDuration>0ms</WriterLingerDuration>
+            <!-- Reduce nack delay for faster retransmit. -->
+            <NackDelay>0ms</NackDelay>
+        </Internal>
+    </Domain>
+</CycloneDDS>

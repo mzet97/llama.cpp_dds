@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  CycloneDDS configuration for cross-machine / network benchmarks (B3).
+  No interface binding — uses the default route.
+  Multicast enabled for SPDP discovery across subnets.
+-->
+<CycloneDDS>
+    <Domain id="any">
+        <General>
+            <AllowMulticast>true</AllowMulticast>
+        </General>
+        <Discovery>
+            <MaxAutoParticipantIndex>30</MaxAutoParticipantIndex>
+        </Discovery>
+        <Internal>
+            <HeartbeatInterval>10ms</HeartbeatInterval>
+            <WriterLingerDuration>0ms</WriterLingerDuration>
+            <NackDelay>0ms</NackDelay>
+        </Internal>
+    </Domain>
+</CycloneDDS>
