@@ -1,12 +1,13 @@
-# B2: Compiled object files
+# Compiled object files
 *.o
 *.a
 *.so
 *.dll
 
-# B2: Built executables
+# Built executables
 test_client
 test_client_*
+benchmark_client
 benchmark_final
 benchmark_final_*
 benchmark_persistent*

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 project(llama-dds)
 
-# M1: CycloneDDS path is now configurable.
+# CycloneDDS path is configurable.
 # Usage: cmake -DCYCLONEDDS_ROOT=/path/to/install ...
 # Falls back to system packages (e.g. apt-installed cyclonedds-dev on Debian/Ubuntu,
 # or a vcpkg-installed package on Windows).
