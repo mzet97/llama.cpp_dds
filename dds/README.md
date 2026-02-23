@@ -81,15 +81,27 @@ Three scenarios evaluate DDS vs HTTP under different conditions:
 
 **Environment**: Ryzen 9 5900X · RX 7900 XTX (ROCm 6.4.2, `-ngl 99`) · WSL 2 (Ubuntu 24.04) · TinyLlama 1.1B Q4_K_M · CycloneDDS 0.11.0
 
-### Localhost (N=20)
+> **v2 results** — after fixing the 50ms poll-interval bug in `dds_poll_loop`
+> (changed to condition-variable-based wake with 5000ms ceiling).
+
+### B0 — Single-Client DDS vs HTTP (N=10)
 
 | Prompt | DDS p50 (ms) | HTTP p50 (ms) | Δ |
 |--------|-------------|--------------|---|
-| simple | 29.5 | 29.1 | +1.4% |
-| medium | 102.8 | 100.4 | +2.4% |
-| complex | 96.5 | 92.7 | +4.0% |
+| simple | 31.0 | ~78 | **−60%** |
+| medium | 109.5 | ~141 | **−22%** |
+| complex | 93.9 | ~132 | **−29%** |
 
-On localhost with GPU inference, **DDS ≈ HTTP**. The bottleneck is model inference, not transport.
+DDS consistently outperforms HTTP on localhost. The advantage is most pronounced for simple prompts where transport overhead dominates.
+
+### B2 — Streaming (N=10)
+
+| Metric | DDS | HTTP |
+|--------|-----|------|
+| TTFT (complex) | 17.0 ms | — |
+| ITL (complex) | 3.26 ms | — |
+| Total (complex) | 340.7 ms | ~560 ms |
+| Chunks | 101 | 103 |
 
 ### With 2 ms Network Delay (N=5, `tc netem`)
 

@@ -7,6 +7,9 @@ URL="https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/
 BUILD_DIR="build-wsl"
 NUM_RUNS="${1:-10}"  # default 10; override with: ./run_benchmarks_wsl.sh <n>
 
+# Library path for llama.cpp
+export LD_LIBRARY_PATH="$PWD/$BUILD_DIR/bin:$LD_LIBRARY_PATH"
+
 # Optimise CycloneDDS for localhost-only communication.
 # Both server and benchmark_final (client) inherit this via the environment.
 export CYCLONEDDS_URI="file://$PWD/dds/cyclonedds-local.xml"

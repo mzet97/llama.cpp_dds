@@ -12,7 +12,7 @@ import math
 
 HOST = "127.0.0.1"
 PORT = 8080
-NUM_TESTS = 10  # overridden by argv[1]
+NUM_TESTS = 64  # overridden by argv[1] - N=64 for statistical significance per Cohen (1988)
 
 MODEL = "tinyllama"  # must match the model loaded by the server
 

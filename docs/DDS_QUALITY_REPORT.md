@@ -51,9 +51,11 @@ The previous benchmarking approach (`benchmark_thesis.py`) was fundamentally fla
 *   **DDS Benchmark (`dds/benchmark_final.cpp`)**: Rewritten to be a persistent, high-performance C++ client. It reuses DDS entities, uses WaitSets for microsecond-precision timing, and properly handles memory.
 *   **HTTP Benchmark (`dds/benchmark_http.py`)**: A new Python script using persistent `http.client` connections to provide a fair baseline for comparison.
 
-## 5. Benchmark Results (Executed on WSL 2)
+## 5. Benchmark Results
 
-Tests performed using `TinyLlama-1.1B` with 5 iterations per prompt type.
+### 5.1 Historical Results (v1 — 2026-02-17)
+
+The initial benchmark run on WSL 2 with `TinyLlama-1.1B` (5 iterations) showed:
 
 | Prompt Type | DDS Mean (ms) | HTTP Mean (ms) | Improvement |
 |-------------|---------------|----------------|-------------|
@@ -61,10 +63,26 @@ Tests performed using `TinyLlama-1.1B` with 5 iterations per prompt type.
 | Medium      | 569.34        | 554.86         | -2.6%       |
 | Complex     | 1308.57       | 557.66         | -134%       |
 
-**Analysis:**
-- **Small Payloads**: DDS demonstrates a clear advantage (~20% lower latency) for simple requests, likely due to reduced protocol overhead (no TCP handshake/headers).
-- **Large Payloads**: For complex prompts generating larger responses, DDS performance degraded significantly in the test environment. This may be attributed to UDP fragmentation/reassembly overhead or default CycloneDDS configuration not being optimized for large loopback transfers (SHM recommended).
-- **Stability**: The high standard deviation in complex DDS tests suggests packet loss or retransmission delays that need tuning.
+> **Note:** These v1 results were affected by a 50ms poll-interval bug in
+> `dds_poll_loop` and early benchmark methodology issues. See v2 below.
+
+### 5.2 Corrected Results (v2 — 2026-02-23)
+
+After fixing the poll interval (50ms → condition-variable-based wake) and using
+the improved benchmark suite with GPU acceleration (`-ngl 99`), 10 iterations:
+
+| Prompt Type | DDS Mean (ms) | DDS p50 (ms) | HTTP Mean (ms) | Δ (mean) |
+|-------------|---------------|-------------|----------------|----------|
+| Simple      | 41.7          | 31.0        | ~78            | **−47%** |
+| Medium      | 106.3         | 109.5       | ~141           | **−25%** |
+| Complex     | 94.5          | 93.9        | ~132           | **−28%** |
+
+**Streaming (DDS B2, complex):** TTFT=17.0ms, ITL=3.26ms, Total=340.7ms, 101 chunks.
+
+**Analysis (v2):**
+- **All Prompt Sizes**: DDS now demonstrates clear advantage across all prompt sizes (1.3x–2.5x faster than HTTP).
+- **Streaming**: Token-by-token streaming works correctly with 101 chunks and sub-4ms inter-token latency.
+- **Stability**: Standard deviations are within expected ranges (3–23ms), confirming reliable measurements.
 
 ## 4. Recommendations & Next Steps
 

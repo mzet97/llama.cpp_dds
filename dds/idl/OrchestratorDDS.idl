@@ -1,0 +1,84 @@
+// Orchestrator DDS IDL - Data types for DDS orchestration
+// This file defines the message types for agent orchestration
+
+@extensibility FINAL
+module orchestrator {
+
+    // Agent registration message
+    struct AgentRegistration {
+        string agent_id;           // Unique UUID for the agent
+        string hostname;           // Host where agent is running
+        long port;                // HTTP port of the agent
+        string model;             // Model name (e.g., "tinyllama-1.1b")
+        string model_path;        // Full path to model file
+        long vram_available_mb;  // Available VRAM in MB
+        long vram_total_mb;      // Total VRAM in MB
+        long slots_idle;         // Number of idle slots
+        long slots_total;        // Total slots
+        boolean vision_enabled;   // Supports vision models
+        boolean reasoning_enabled; // Supports reasoning models
+        long registered_at;      // Registration timestamp
+    };
+
+    // Agent status heartbeat
+    struct AgentStatus {
+        string agent_id;         // Agent UUID
+        string state;            // "idle", "busy", "error"
+        long current_slots;      // Currently used slots
+        long idle_slots;         // Idle slots
+        long memory_usage_mb;    // RAM usage in MB
+        long vram_usage_mb;     // VRAM usage in MB
+        string current_model;    // Currently loaded model
+        long last_heartbeat;     // Timestamp
+    };
+
+    // Task request from orchestrator to agent
+    struct TaskRequest {
+        string task_id;           // Unique task UUID
+        string requester_id;    // Who requested this task
+        string task_type;         // "chat", "completion", "embedding"
+        string messages_json;    // JSON serialized messages
+        long priority;          // Priority 1-10
+        long timeout_ms;         // Timeout in milliseconds
+        boolean requires_context; // Needs conversation context
+        string context_id;       // Context ID if needed
+        long created_at;        // Creation timestamp
+    };
+
+    // Task response from agent to orchestrator
+    struct TaskResponse {
+        string task_id;           // Task UUID
+        string agent_id;          // Agent UUID
+        string content;           // Generated text
+        boolean is_final;        // Is this the final response
+        long prompt_tokens;       // Tokens in prompt
+        long completion_tokens;  // Tokens generated
+        long processing_time_ms; // Processing time
+        boolean success;          // Did the task succeed
+        string error_message;   // Error message if failed
+        long created_at;        // Response timestamp
+    };
+
+    // Client request (external client to orchestrator)
+    struct ClientRequest {
+        string request_id;        // Client request UUID
+        string client_id;         // Client identifier
+        string task_type;        // "chat", "completion"
+        string messages_json;    // JSON serialized messages
+        long priority;           // Priority 1-10
+        long timeout_ms;         // Timeout in ms
+        boolean requires_context;
+    };
+
+    // Client response (orchestrator to external client)
+    struct ClientResponse {
+        string request_id;        // Client request UUID
+        string content;            // Generated text
+        boolean is_final;
+        long prompt_tokens;
+        long completion_tokens;
+        long processing_time_ms;
+        boolean success;
+        string error_message;
+    };
+};

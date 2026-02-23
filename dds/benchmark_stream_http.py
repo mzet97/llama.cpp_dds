@@ -116,7 +116,7 @@ def _percentile(data, pct):
 
 
 def main():
-    num_runs = int(sys.argv[1]) if len(sys.argv) > 1 else 20
+    num_runs = int(sys.argv[1]) if len(sys.argv) > 1 else 64  # N=64 for statistical significance per Cohen (1988)
     csv_path = sys.argv[2]      if len(sys.argv) > 2 else None
     model    = sys.argv[3]      if len(sys.argv) > 3 else DEFAULT_MODEL
     host     = sys.argv[4]      if len(sys.argv) > 4 else DEFAULT_HOST

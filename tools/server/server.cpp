@@ -336,8 +336,12 @@ static void dds_poll_loop(llama_dds::DDSBridge *      dds_bridge,
     std::atomic<int> in_flight{ 0 };
 
     while (running->load()) {
-        // Block until a request arrives or 50ms elapses.
-        dds_bridge->wait_for_request(std::chrono::milliseconds(50));
+        // Block until a request arrives or the timeout elapses.
+        // Using 5000ms ceiling — the condition variable wakes us instantly whenever
+        // handle_request() calls cv_pending_.notify_one(), so this large timeout
+        // only matters for shutdown detection.  Previous 50ms timeout caused a
+        // ~25ms average artificial floor on every request latency (FASE 2.1 fix).
+        dds_bridge->wait_for_request(std::chrono::milliseconds(5000));
 
         llama_dds::ChatCompletionRequest req;
         // Drain all queued requests, dispatching each to its own detached thread

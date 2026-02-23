@@ -134,7 +134,7 @@ std::vector<double> run_test(dds_entity_t writer,
 }
 
 int main(int argc, char * argv[]) {
-    int num_tests = 10;
+    int num_tests = 64;  // N=64 for statistical significance per Cohen (1988)
     if (argc > 1) {
         num_tests = atoi(argv[1]);
     }

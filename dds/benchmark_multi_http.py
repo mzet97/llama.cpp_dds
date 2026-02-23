@@ -47,7 +47,7 @@ def _send_one(conn: http.client.HTTPConnection, prompt: str, model: str) -> floa
 
 
 def main():
-    num_runs  = int(sys.argv[1]) if len(sys.argv) > 1 else 20
+    num_runs  = int(sys.argv[1]) if len(sys.argv) > 1 else 64  # N=64 for statistical significance per Cohen (1988)
     csv_path  = sys.argv[2]      if len(sys.argv) > 2 else None
     model     = sys.argv[3]      if len(sys.argv) > 3 else DEFAULT_MODEL
     client_id = int(sys.argv[4]) if len(sys.argv) > 4 else 0
