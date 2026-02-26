@@ -1,7 +1,7 @@
 // Orchestrator DDS IDL - Data types for DDS orchestration
 // This file defines the message types for agent orchestration
 
-@extensibility FINAL
+#pragma extensibility FINAL
 module orchestrator {
 
     // Agent registration message
