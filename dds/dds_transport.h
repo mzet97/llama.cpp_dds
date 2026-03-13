@@ -47,9 +47,9 @@ class DDSTransport {
     DDSTransport(const DDSTransport &)             = delete;
     DDSTransport & operator=(const DDSTransport &) = delete;
 
-    // Allow moving
-    DDSTransport(DDSTransport &&) noexcept;
-    DDSTransport & operator=(DDSTransport &&) noexcept;
+    // Moving not supported (std::atomic is not movable)
+    DDSTransport(DDSTransport &&) = delete;
+    DDSTransport & operator=(DDSTransport &&) = delete;
 
     /// @name Server-mode interface
     /// @{
@@ -82,11 +82,12 @@ class DDSTransport {
     void send_request(const ChatCompletionRequest & request);
 
     /// Register a callback invoked for each received response.
-    /// Must be called before start_client().
+    /// MUST be called before start_client(); start_client() returns false if omitted.
     void subscribe_responses(ResponseCallback on_response);
 
     /// Register a callback invoked for each received server-status update.
-    /// Must be called before start_client().
+    /// Should be called before start_client() (optional — status updates are
+    /// silently ignored if no callback is registered).
     void subscribe_status(StatusCallback on_status);
 
     /// @}

@@ -89,6 +89,7 @@ static void process_dds_request(llama_dds::DDSBridge *                   dds_bri
 ) {
     LOG_INF("[DDS] Processing request: %s\n", dds_req.request_id.c_str());
 
+    try {
     // Convert DDS request to JSON (ordered_json = server's `json` type for oaicompat calls)
     json data = dds_request_to_json(dds_req, model_name);
 
@@ -318,6 +319,20 @@ static void process_dds_request(llama_dds::DDSBridge *                   dds_bri
     queue_results->remove_waiting_task_id(task_id);
 
     LOG_INF("[DDS] Response sent for request: %s\n", dds_req.request_id.c_str());
+    } catch (const std::exception & ex) {
+        LOG_ERR("[DDS] Unhandled exception processing request %s: %s\n", dds_req.request_id.c_str(), ex.what());
+        // Ensure pending count is decremented via a final error response
+        llama_dds::ChatCompletionResponse err_resp;
+        err_resp.request_id    = dds_req.request_id;
+        err_resp.model         = model_name;
+        err_resp.content       = std::string("[DDS] Internal error: ") + ex.what();
+        err_resp.is_final      = true;
+        err_resp.finish_reason = "error";
+        dds_bridge->send_response(err_resp);
+    } catch (...) {
+        LOG_ERR("[DDS] Unknown exception processing request %s\n", dds_req.request_id.c_str());
+        dds_bridge->cancel_pending_request();
+    }
 }
 
 // DDS polling thread function

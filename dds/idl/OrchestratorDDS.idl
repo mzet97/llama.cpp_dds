@@ -17,7 +17,7 @@ module orchestrator {
         long slots_total;        // Total slots
         boolean vision_enabled;   // Supports vision models
         boolean reasoning_enabled; // Supports reasoning models
-        long registered_at;      // Registration timestamp
+        long long registered_at; // Registration timestamp (epoch ms)
     };
 
     // Agent status heartbeat
@@ -29,7 +29,7 @@ module orchestrator {
         long memory_usage_mb;    // RAM usage in MB
         long vram_usage_mb;     // VRAM usage in MB
         string current_model;    // Currently loaded model
-        long last_heartbeat;     // Timestamp
+        long long last_heartbeat; // Timestamp (epoch ms)
     };
 
     // Task request from orchestrator to agent
@@ -42,7 +42,8 @@ module orchestrator {
         long timeout_ms;         // Timeout in milliseconds
         boolean requires_context; // Needs conversation context
         string context_id;       // Context ID if needed
-        long created_at;        // Creation timestamp
+        long long created_at;   // Creation timestamp (epoch ms)
+        boolean stream;          // Whether to stream the response
     };
 
     // Task response from agent to orchestrator
@@ -56,7 +57,7 @@ module orchestrator {
         long processing_time_ms; // Processing time
         boolean success;          // Did the task succeed
         string error_message;   // Error message if failed
-        long created_at;        // Response timestamp
+        long long created_at;   // Response timestamp (epoch ms)
     };
 
     // Client request (external client to orchestrator)
@@ -68,11 +69,13 @@ module orchestrator {
         long priority;           // Priority 1-10
         long timeout_ms;         // Timeout in ms
         boolean requires_context;
+        long long created_at;    // Creation timestamp (epoch ms)
     };
 
     // Client response (orchestrator to external client)
     struct ClientResponse {
         string request_id;        // Client request UUID
+        string client_id;         // Client identifier
         string content;            // Generated text
         boolean is_final;
         long prompt_tokens;

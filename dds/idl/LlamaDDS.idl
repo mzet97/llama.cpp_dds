@@ -29,7 +29,10 @@ module llama {
         string request_id;           // Correlates with request
         string model;                // Model name
         string content;              // Generated text
-        string finish_reason;        // "stop", "length", null
+        string finish_reason;        // "stop", "length", or "" for intermediate streaming chunks.
+                                     // IDL string is non-optional; DDS serializes absent value as "".
+                                     // C++ consumers must test finish_reason[0]=='\0' (not null pointer)
+                                     // to detect "not set" in streaming chunks.
         boolean is_final;           // Last chunk?
         long prompt_tokens;          // Tokens in prompt
         long completion_tokens;      // Tokens generated

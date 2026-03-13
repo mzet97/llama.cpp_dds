@@ -24,7 +24,8 @@ static const char * TOPIC_REQUEST  = "llama_chat_completion_request";
 static const char * TOPIC_RESPONSE = "llama_chat_completion_response";
 
 // Default model name; can be overridden via argv[3].
-static const char * DEFAULT_MODEL = "tinyllama";
+// Must match the model loaded by the server (e.g., phi4-mini, qwen3.5-9b).
+static const char * DEFAULT_MODEL = "phi4-mini";
 
 struct PromptTest {
     const char * name;
@@ -147,8 +148,8 @@ int main(int argc, char * argv[]) {
     std::ofstream csv_file;
     if (argc > 2) {
         csv_file.open(argv[2]);
-        // Header
-        csv_file << "prompt_type,mean,std,p50,p95,p99" << std::endl;
+        // Header — model column allows post-hoc audit of which model was benchmarked
+        csv_file << "model,prompt_type,mean,std,p50,p95,p99" << std::endl;
     }
 
     // Initialize DDS
@@ -278,7 +279,7 @@ int main(int argc, char * argv[]) {
 
         // CSV output to file
         if (csv_file.is_open()) {
-            csv_file << PROMPTS[p].name << "," << mean << "," << stddev << "," << p50 << "," << p95 << "," << p99
+            csv_file << model_name << "," << PROMPTS[p].name << "," << mean << "," << stddev << "," << p50 << "," << p95 << "," << p99
                      << std::endl;
         }
     }

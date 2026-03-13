@@ -94,8 +94,9 @@ class DDSBridgeImpl {
     void inc_pending() { pending_count_.fetch_add(1); }
 
     void dec_pending() {
-        if (pending_count_.load() > 0) {
-            pending_count_.fetch_sub(1);
+        int old = pending_count_.load();
+        while (old > 0 && !pending_count_.compare_exchange_weak(old, old - 1)) {
+            // CAS loop: retry if another thread modified pending_count_
         }
     }
 
@@ -169,8 +170,16 @@ void DDSBridge::set_task_complete_callback(TaskCompleteCallback callback) {
 
 void DDSBridge::send_response(const ChatCompletionResponse & response) {
     if (pimpl_) {
-        pimpl_->dec_pending();  // one less in-flight request
+        if (response.is_final) {
+            pimpl_->dec_pending();  // only decrement when request is fully complete
+        }
         pimpl_->send_response(response);
+    }
+}
+
+void DDSBridge::cancel_pending_request() {
+    if (pimpl_) {
+        pimpl_->dec_pending();
     }
 }
 
@@ -181,13 +190,15 @@ void DDSBridge::set_model_info(const std::string & model_name, bool ready, int n
 }
 
 void DDSBridge::handle_request(const ChatCompletionRequest & request) {
+    // Increment pending count BEFORE inserting into map to prevent race
+    // where a fast pop+complete could decrement before increment.
+    pimpl_->inc_pending();
+
     // Store request for tracking
     {
         std::lock_guard<std::mutex> lock(mutex_);
         pending_requests_[request.request_id] = request;
     }
-
-    pimpl_->inc_pending();  // track in-flight count for status reporting
 
     fprintf(stderr, "[DDSBridge] request queued: model=%s, request_id=%s\n", request.model.c_str(),
             request.request_id.c_str());

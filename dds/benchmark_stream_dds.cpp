@@ -28,7 +28,7 @@
 
 static const char * TOPIC_REQUEST  = "llama_chat_completion_request";
 static const char * TOPIC_RESPONSE = "llama_chat_completion_response";
-static const char * DEFAULT_MODEL  = "tinyllama";
+static const char * DEFAULT_MODEL  = "phi4-mini";
 
 using Clock = std::chrono::high_resolution_clock;
 using Ms    = std::chrono::duration<double, std::milli>;
@@ -99,12 +99,14 @@ static StreamResult send_stream(dds_entity_t   writer,
                     // Edge case: final came without any partial chunks
                     result.ttft_ms = result.total_ms;
                 }
-                result.num_chunks++;
+                // Do NOT count the is_final sentinel in num_chunks;
+                // num_chunks reflects only content-bearing messages so that
+                // it equals the number of tokens delivered as partial chunks.
                 dds_return_loan(reader, samples, n);
                 break;
             }
 
-            // Partial chunk (is_final == false)
+            // Partial chunk (is_final == false) — counts as one content chunk
             result.num_chunks++;
             if (first_chunk) {
                 result.ttft_ms = Ms(t_now - t_start).count();
@@ -182,14 +184,25 @@ int main(int argc, char * argv[]) {
     dds_entity_t res_topic =
         dds_create_topic(participant, &llama_ChatCompletionResponse_desc, TOPIC_RESPONSE, nullptr, nullptr);
 
-    dds_qos_t * qos = dds_create_qos();
-    dds_qset_reliability(qos, DDS_RELIABILITY_RELIABLE, DDS_SECS(10));
-    dds_qset_durability(qos, DDS_DURABILITY_TRANSIENT_LOCAL);
-    dds_qset_history(qos, DDS_HISTORY_KEEP_LAST, 32);  // larger buffer for streaming
+    // Request writer: history=8 matches the server's request reader QoS.
+    // TRANSIENT_LOCAL with a small history avoids delivering stale requests to
+    // a server that restarts mid-benchmark.
+    dds_qos_t * req_qos = dds_create_qos();
+    dds_qset_reliability(req_qos, DDS_RELIABILITY_RELIABLE, DDS_SECS(10));
+    dds_qset_durability(req_qos, DDS_DURABILITY_TRANSIENT_LOCAL);
+    dds_qset_history(req_qos, DDS_HISTORY_KEEP_LAST, 8);
 
-    dds_entity_t writer = dds_create_writer(participant, req_topic, qos, nullptr);
-    dds_entity_t reader = dds_create_reader(participant, res_topic, qos, nullptr);
-    dds_delete_qos(qos);
+    // Response reader: larger history buffers streaming token messages so the
+    // application is not forced to drain them faster than the server emits them.
+    dds_qos_t * res_qos = dds_create_qos();
+    dds_qset_reliability(res_qos, DDS_RELIABILITY_RELIABLE, DDS_SECS(10));
+    dds_qset_durability(res_qos, DDS_DURABILITY_TRANSIENT_LOCAL);
+    dds_qset_history(res_qos, DDS_HISTORY_KEEP_LAST, 32);
+
+    dds_entity_t writer = dds_create_writer(participant, req_topic, req_qos, nullptr);
+    dds_entity_t reader = dds_create_reader(participant, res_topic, res_qos, nullptr);
+    dds_delete_qos(req_qos);
+    dds_delete_qos(res_qos);
 
     if (writer < 0 || reader < 0) {
         std::cerr << "DDS entity fail\n";
@@ -223,7 +236,7 @@ int main(int argc, char * argv[]) {
     std::ofstream csv;
     if (csv_path) {
         csv.open(csv_path);
-        csv << "prompt_type,iteration,ttft_ms,itl_mean_ms,itl_p50_ms,itl_p95_ms,total_ms,num_chunks\n";
+        csv << "model,prompt_type,iteration,ttft_ms,itl_mean_ms,itl_p50_ms,itl_p95_ms,total_ms,num_chunks\n";
     }
 
     struct PromptDef {
@@ -265,7 +278,7 @@ int main(int argc, char * argv[]) {
             all_itl.insert(all_itl.end(), r.itl_ms.begin(), r.itl_ms.end());
 
             if (csv.is_open()) {
-                csv << pd.name << "," << i << "," << r.ttft_ms << "," << vec_mean(r.itl_ms) << ","
+                csv << model << "," << pd.name << "," << i << "," << r.ttft_ms << "," << vec_mean(r.itl_ms) << ","
                     << vec_percentile(r.itl_ms, 0.50) << "," << vec_percentile(r.itl_ms, 0.95) << "," << r.total_ms
                     << "," << r.num_chunks << "\n";
             }

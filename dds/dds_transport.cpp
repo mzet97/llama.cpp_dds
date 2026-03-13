@@ -74,6 +74,7 @@ class DDSTransportImpl {
             request_reader_ = dds_create_reader(participant_, request_topic_, qos, nullptr);
             if (request_reader_ < 0) {
                 fprintf(stderr, "[DDS] Failed to create request reader: %d\n", request_reader_);
+                dds_delete_qos(qos);
                 return false;
             }
 
@@ -81,6 +82,7 @@ class DDSTransportImpl {
             response_writer_ = dds_create_writer(participant_, response_topic_, qos, nullptr);
             if (response_writer_ < 0) {
                 fprintf(stderr, "[DDS] Failed to create response writer: %d\n", response_writer_);
+                dds_delete_qos(qos);
                 return false;
             }
 
@@ -96,6 +98,7 @@ class DDSTransportImpl {
             dds_delete_qos(status_qos);
             if (status_writer_ < 0) {
                 fprintf(stderr, "[DDS] Failed to create status writer: %d\n", status_writer_);
+                dds_delete_qos(qos);
                 return false;
             }
 
@@ -121,7 +124,11 @@ class DDSTransportImpl {
     }
 
     void stop() {
-        running_ = false;
+        // Idempotent: only execute cleanup once
+        bool was_running = running_.exchange(false);
+        if (!was_running || participant_ <= 0) {
+            return;
+        }
 
         if (reader_thread_.joinable()) {
             reader_thread_.join();
@@ -131,25 +138,30 @@ class DDSTransportImpl {
             response_reader_thread_.join();
         }
 
-        for (dds_entity_t * e :
-             { &response_writer_, &status_writer_, &request_reader_, &request_writer_, &response_reader_,
-               &status_reader_, &request_topic_, &response_topic_, &status_topic_, &participant_ }) {
-            if (*e > 0) {
-                dds_delete(*e);
-                *e = 0;
-            }
+        // dds_delete(participant_) cascades to all children (topics, readers, writers).
+        if (participant_ > 0) {
+            dds_delete(participant_);
+            participant_ = 0;
         }
+        // Zero out handles so they aren't reused after deletion.
+        response_writer_ = status_writer_ = request_reader_ = 0;
+        request_writer_ = response_reader_ = status_reader_ = 0;
+        request_topic_ = response_topic_ = status_topic_ = 0;
 
         fprintf(stderr, "[DDS] Transport stopped\n");
     }
 
     void send_response(const llama_dds::ChatCompletionResponse & response) {
-        if (response_writer_ <= 0) {
+        if (!running_.load(std::memory_order_acquire) || response_writer_ <= 0) {
             return;
         }
 
-        auto         data = to_llama_response(response);
-        dds_return_t ret  = dds_write(response_writer_, &data);
+        auto data = to_llama_response(response);
+        if (!data.request_id) {
+            fprintf(stderr, "[DDS] OOM: cannot send response (allocation failed)\n");
+            return;
+        }
+        dds_return_t ret = dds_write(response_writer_, &data);
         free_llama_response(data);  // free strdup'd strings after dds_write
         if (ret != DDS_RETCODE_OK) {
             fprintf(stderr, "[DDS] Error sending response: %d\n", ret);
@@ -159,13 +171,20 @@ class DDSTransportImpl {
     }
 
     void publish_status(const llama_dds::ServerStatus & status) {
-        if (status_writer_ <= 0) {
+        if (!running_.load(std::memory_order_acquire) || status_writer_ <= 0) {
             return;
         }
 
         auto data = to_llama_status(status);
-        dds_write(status_writer_, &data);
+        if (!data.server_id) {
+            // OOM in to_llama_status — skip publish
+            return;
+        }
+        dds_return_t ret = dds_write(status_writer_, &data);
         free_llama_status(data);  // free strdup'd strings after dds_write
+        if (ret != DDS_RETCODE_OK) {
+            fprintf(stderr, "[DDS] Error publishing status: %d\n", ret);
+        }
     }
 
     //
@@ -236,8 +255,13 @@ class DDSTransportImpl {
             fprintf(stderr, "[DDS Client] not started — call start_client() first\n");
             return;
         }
-        auto         data = to_llama_request(request);
-        dds_return_t ret  = dds_write(request_writer_, &data);
+        auto data = to_llama_request(request);
+        if (!data.request_id) {
+            // OOM in to_llama_request — skip send
+            fprintf(stderr, "[DDS Client] OOM: failed to convert request\n");
+            return;
+        }
+        dds_return_t ret = dds_write(request_writer_, &data);
         free_llama_request(data);
         if (ret != DDS_RETCODE_OK) {
             fprintf(stderr, "[DDS Client] Failed to send request: %d\n", ret);
@@ -255,9 +279,15 @@ class DDSTransportImpl {
             return;
         }
 
-        dds_waitset_attach(ws, response_reader_, DDS_DATA_AVAILABLE_STATUS);
+        if (dds_waitset_attach(ws, response_reader_, DDS_DATA_AVAILABLE_STATUS) < 0) {
+            fprintf(stderr, "[DDS Client] Failed to attach response_reader_ to waitset\n");
+            dds_delete(ws);
+            return;
+        }
         if (status_reader_ > 0) {
-            dds_waitset_attach(ws, status_reader_, DDS_DATA_AVAILABLE_STATUS);
+            if (dds_waitset_attach(ws, status_reader_, DDS_DATA_AVAILABLE_STATUS) < 0) {
+                fprintf(stderr, "[DDS Client] Failed to attach status_reader_ to waitset\n");
+            }
         }
 
         dds_attach_t ws_results[2];
@@ -271,30 +301,30 @@ class DDSTransportImpl {
                 continue;
             }
 
-            // Check response reader
-            {
+            // Drain all available response samples
+            while (true) {
                 void *            samples[1] = { nullptr };
                 dds_sample_info_t infos[1];
                 dds_return_t      n = dds_take(response_reader_, samples, infos, 1, 1);
-                if (n > 0) {
-                    if (infos[0].valid_data && response_callback_) {
-                        auto * resp = static_cast<llama_ChatCompletionResponse *>(samples[0]);
-                        try {
-                            response_callback_(to_response(*resp));
-                        } catch (const std::exception & e) {
-                            fprintf(stderr, "[DDS Client] response callback error: %s\n", e.what());
-                        }
+                if (n <= 0) break;
+                if (infos[0].valid_data && response_callback_) {
+                    auto * resp = static_cast<llama_ChatCompletionResponse *>(samples[0]);
+                    try {
+                        response_callback_(to_response(*resp));
+                    } catch (const std::exception & e) {
+                        fprintf(stderr, "[DDS Client] response callback error: %s\n", e.what());
                     }
-                    dds_return_loan(response_reader_, samples, n);
                 }
+                dds_return_loan(response_reader_, samples, n);
             }
 
-            // Check status reader
+            // Drain all available status samples
             if (status_reader_ > 0 && status_callback_) {
-                void *            samples[1] = { nullptr };
-                dds_sample_info_t infos[1];
-                dds_return_t      n = dds_take(status_reader_, samples, infos, 1, 1);
-                if (n > 0) {
+                while (true) {
+                    void *            samples[1] = { nullptr };
+                    dds_sample_info_t infos[1];
+                    dds_return_t      n = dds_take(status_reader_, samples, infos, 1, 1);
+                    if (n <= 0) break;
                     if (infos[0].valid_data) {
                         auto * st = static_cast<llama_ServerStatus *>(samples[0]);
                         try {
@@ -341,38 +371,37 @@ class DDSTransportImpl {
             }
 
             if (rc > 0) {
-                // Data available
-                void *            samples[1];
-                dds_sample_info_t infos[1];
+                // Drain all available request samples
+                while (true) {
+                    void *            samples[1] = { nullptr };
+                    dds_sample_info_t infos[1];
 
-                // Use loan instead of copy/alloc for zero-copy read
-                samples[0] = nullptr;
+                    dds_return_t n = dds_take(request_reader_, samples, infos, 1, 1);
 
-                dds_return_t n = dds_take(request_reader_, samples, infos, 1, 1);
+                    if (n > 0) {
+                        if (infos[0].valid_data) {
+                            auto * req = static_cast<llama_ChatCompletionRequest *>(samples[0]);
+                            try {
+                                auto request = to_request(*req);
 
-                if (n > 0) {
-                    if (infos[0].valid_data) {
-                        auto * req = static_cast<llama_ChatCompletionRequest *>(samples[0]);
-                        try {
-                            // Copy data to our C++ structure before returning the loan
-                            // This is unavoidable unless we change the callback signature to take raw pointers
-                            auto request = to_request(*req);
+                                fprintf(stderr, "[DDS] Received request: id=%s, model=%s\n", request.request_id.c_str(),
+                                        request.model.c_str());
 
-                            fprintf(stderr, "[DDS] Received request: id=%s, model=%s\n", request.request_id.c_str(),
-                                    request.model.c_str());
-
-                            if (request_callback_) {
-                                request_callback_(request);
+                                if (request_callback_) {
+                                    request_callback_(request);
+                                }
+                            } catch (const std::exception & e) {
+                                fprintf(stderr, "[DDS] Error processing request: %s\n", e.what());
                             }
-                        } catch (const std::exception & e) {
-                            fprintf(stderr, "[DDS] Error processing request: %s\n", e.what());
                         }
-                    }
 
-                    // Return the loan to DDS
-                    dds_return_loan(request_reader_, samples, n);
-                } else if (n < 0) {
-                    fprintf(stderr, "[DDS] Error reading: %d\n", n);
+                        dds_return_loan(request_reader_, samples, n);
+                    } else {
+                        if (n < 0) {
+                            fprintf(stderr, "[DDS] Error reading: %d\n", n);
+                        }
+                        break;
+                    }
                 }
             }
         }
@@ -435,6 +464,10 @@ void DDSTransport::publish_status(const llama_dds::ServerStatus & status) {
 }
 
 bool DDSTransport::start_client() {
+    if (!response_callback_) {
+        fprintf(stderr, "[DDS Client] subscribe_responses() must be called before start_client()\n");
+        return false;
+    }
     is_server_ = false;
     running_   = true;
     return pimpl_->start_client(response_callback_, status_callback_);

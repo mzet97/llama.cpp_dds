@@ -23,37 +23,46 @@ namespace llama_dds {
 inline void free_llama_request(llama_ChatCompletionRequest & req) {
     if (req.request_id) {
         free(req.request_id);
+        req.request_id = nullptr;
     }
     if (req.model) {
         free(req.model);
+        req.model = nullptr;
     }
 
     if (req.messages._buffer) {
         for (uint32_t i = 0; i < req.messages._length; i++) {
             if (req.messages._buffer[i].role) {
                 free(req.messages._buffer[i].role);
+                req.messages._buffer[i].role = nullptr;
             }
             if (req.messages._buffer[i].content) {
                 free(req.messages._buffer[i].content);
+                req.messages._buffer[i].content = nullptr;
             }
         }
         free(req.messages._buffer);
+        req.messages._buffer = nullptr;
     }
 
     if (req.top_p._buffer) {
         free(req.top_p._buffer);
+        req.top_p._buffer = nullptr;
     }
     if (req.n._buffer) {
         free(req.n._buffer);
+        req.n._buffer = nullptr;
     }
 
     if (req.stop._buffer) {
         for (uint32_t i = 0; i < req.stop._length; i++) {
             if (req.stop._buffer[i]) {
                 free(req.stop._buffer[i]);
+                req.stop._buffer[i] = nullptr;
             }
         }
         free(req.stop._buffer);
+        req.stop._buffer = nullptr;
     }
 }
 
@@ -61,15 +70,19 @@ inline void free_llama_request(llama_ChatCompletionRequest & req) {
 inline void free_llama_response(llama_ChatCompletionResponse & resp) {
     if (resp.request_id) {
         free(resp.request_id);
+        resp.request_id = nullptr;
     }
     if (resp.model) {
         free(resp.model);
+        resp.model = nullptr;
     }
     if (resp.content) {
         free(resp.content);
+        resp.content = nullptr;
     }
     if (resp.finish_reason) {
         free(resp.finish_reason);
+        resp.finish_reason = nullptr;
     }
 }
 
@@ -97,8 +110,15 @@ inline ChatMessage to_chat_message(const llama_ChatMessage & msg) {
 
 inline llama_ChatMessage to_llama_chat_message(const ChatMessage & msg) {
     llama_ChatMessage result;
+    memset(&result, 0, sizeof(result));
     result.role    = dds_strdup(msg.role.c_str());
     result.content = dds_strdup(msg.content.c_str());
+    if (!result.role || !result.content) {
+        fprintf(stderr, "[DDS] OOM: dds_strdup failed in to_llama_chat_message\n");
+        free(result.role);
+        free(result.content);
+        memset(&result, 0, sizeof(result));
+    }
     return result;
 }
 
@@ -112,8 +132,10 @@ inline ChatCompletionRequest to_request(const llama_ChatCompletionRequest & req)
     result.stream      = req.stream;
 
     // Convert messages
-    for (uint32_t i = 0; i < req.messages._length; i++) {
-        result.messages.push_back(to_chat_message(req.messages._buffer[i]));
+    if (req.messages._buffer != nullptr) {
+        for (uint32_t i = 0; i < req.messages._length; i++) {
+            result.messages.push_back(to_chat_message(req.messages._buffer[i]));
+        }
     }
 
     // Optional: top_p
@@ -143,17 +165,45 @@ inline llama_ChatCompletionRequest to_llama_request(const ChatCompletionRequest 
 
     result.request_id  = dds_strdup(req.request_id.c_str());
     result.model       = dds_strdup(req.model.c_str());
+    if (!result.request_id || !result.model) {
+        fprintf(stderr, "[DDS] OOM: dds_strdup failed in to_llama_request\n");
+        free(result.request_id);
+        free(result.model);
+        memset(&result, 0, sizeof(result));
+        return result;
+    }
     result.temperature = req.temperature;
     result.max_tokens  = req.max_tokens;
     result.stream      = req.stream;
 
     // Messages
-    result.messages._maximum = req.messages.size();
-    result.messages._length  = req.messages.size();
-    result.messages._buffer  = (llama_ChatMessage *) malloc(sizeof(llama_ChatMessage) * req.messages.size());
-    result.messages._release = true;
-    for (size_t i = 0; i < req.messages.size(); i++) {
-        result.messages._buffer[i] = to_llama_chat_message(req.messages[i]);
+    if (req.messages.empty()) {
+        result.messages._maximum = 0;
+        result.messages._length  = 0;
+        result.messages._buffer  = nullptr;
+        result.messages._release = false;
+    } else {
+        result.messages._maximum = req.messages.size();
+        result.messages._length  = req.messages.size();
+        result.messages._buffer  = (llama_ChatMessage *) malloc(sizeof(llama_ChatMessage) * req.messages.size());
+        if (!result.messages._buffer) {
+            fprintf(stderr, "[DDS] OOM: failed to allocate messages buffer (count=%zu)\n", req.messages.size());
+            free_llama_request(result);
+            memset(&result, 0, sizeof(result));
+            return result;
+        }
+        result.messages._release = true;
+        for (size_t i = 0; i < req.messages.size(); i++) {
+            result.messages._buffer[i] = to_llama_chat_message(req.messages[i]);
+            if (!result.messages._buffer[i].role || !result.messages._buffer[i].content) {
+                // OOM during message conversion — clean up everything
+                fprintf(stderr, "[DDS] OOM: to_llama_chat_message failed at index %zu\n", i);
+                result.messages._length = (uint32_t)(i);  // only free successfully allocated messages
+                free_llama_request(result);
+                memset(&result, 0, sizeof(result));
+                return result;
+            }
+        }
     }
 
     // top_p
@@ -161,8 +211,15 @@ inline llama_ChatCompletionRequest to_llama_request(const ChatCompletionRequest 
         result.top_p._maximum   = 1;
         result.top_p._length    = 1;
         result.top_p._buffer    = (float *) malloc(sizeof(float));
-        result.top_p._buffer[0] = *req.top_p;
-        result.top_p._release   = true;
+        if (result.top_p._buffer) {
+            result.top_p._buffer[0] = *req.top_p;
+            result.top_p._release   = true;
+        } else {
+            fprintf(stderr, "[DDS] OOM: failed to allocate top_p buffer\n");
+            free_llama_request(result);
+            memset(&result, 0, sizeof(result));
+            return result;
+        }
     } else {
         result.top_p._maximum = 0;
         result.top_p._length  = 0;
@@ -175,8 +232,15 @@ inline llama_ChatCompletionRequest to_llama_request(const ChatCompletionRequest 
         result.n._maximum   = 1;
         result.n._length    = 1;
         result.n._buffer    = (int32_t *) malloc(sizeof(int32_t));
-        result.n._buffer[0] = *req.n;
-        result.n._release   = true;
+        if (result.n._buffer) {
+            result.n._buffer[0] = *req.n;
+            result.n._release   = true;
+        } else {
+            fprintf(stderr, "[DDS] OOM: failed to allocate n buffer\n");
+            free_llama_request(result);
+            memset(&result, 0, sizeof(result));
+            return result;
+        }
     } else {
         result.n._maximum = 0;
         result.n._length  = 0;
@@ -189,9 +253,22 @@ inline llama_ChatCompletionRequest to_llama_request(const ChatCompletionRequest 
         result.stop._maximum = req.stop->size();
         result.stop._length  = req.stop->size();
         result.stop._buffer  = (char **) malloc(sizeof(char *) * req.stop->size());
-        result.stop._release = true;
-        for (size_t i = 0; i < req.stop->size(); i++) {
-            result.stop._buffer[i] = dds_strdup(req.stop->at(i).c_str());
+        if (result.stop._buffer) {
+            result.stop._release = true;
+            for (size_t i = 0; i < req.stop->size(); i++) {
+                result.stop._buffer[i] = dds_strdup(req.stop->at(i).c_str());
+                if (!result.stop._buffer[i]) {
+                    fprintf(stderr, "[DDS] OOM: dds_strdup failed for stop string %zu\n", i);
+                    result.stop._length = (uint32_t) i;
+                    free_llama_request(result);
+                    memset(&result, 0, sizeof(result));
+                    return result;
+                }
+            }
+        } else {
+            result.stop._maximum = 0;
+            result.stop._length  = 0;
+            result.stop._release = false;
         }
     } else {
         result.stop._maximum = 0;
@@ -209,7 +286,10 @@ inline ChatCompletionResponse to_response(const llama_ChatCompletionResponse & r
     result.request_id        = resp.request_id ? resp.request_id : "";
     result.model             = resp.model ? resp.model : "";
     result.content           = resp.content ? resp.content : "";
-    result.finish_reason     = resp.finish_reason ? std::make_optional<std::string>(resp.finish_reason) : std::nullopt;
+    // Empty string on wire represents nullopt (IDL strings cannot be null)
+    result.finish_reason     = (resp.finish_reason && resp.finish_reason[0] != '\0')
+                                 ? std::make_optional<std::string>(resp.finish_reason)
+                                 : std::nullopt;
     result.is_final          = resp.is_final;
     result.prompt_tokens     = resp.prompt_tokens;
     result.completion_tokens = resp.completion_tokens;
@@ -220,10 +300,23 @@ inline llama_ChatCompletionResponse to_llama_response(const ChatCompletionRespon
     llama_ChatCompletionResponse result;
     memset(&result, 0, sizeof(result));
 
-    result.request_id        = dds_strdup(resp.request_id.c_str());
-    result.model             = dds_strdup(resp.model.c_str());
-    result.content           = dds_strdup(resp.content.c_str());
-    result.finish_reason     = resp.finish_reason ? dds_strdup(resp.finish_reason->c_str()) : nullptr;
+    result.request_id    = dds_strdup(resp.request_id.c_str());
+    result.model         = dds_strdup(resp.model.c_str());
+    result.content       = dds_strdup(resp.content.c_str());
+    // IDL requires non-null string; use empty string to represent "absent"
+    result.finish_reason = resp.finish_reason ? dds_strdup(resp.finish_reason->c_str()) : dds_strdup("");
+
+    if (!result.request_id || !result.model || !result.content || !result.finish_reason) {
+        fprintf(stderr, "[DDS] OOM: dds_strdup failed in to_llama_response\n");
+        // Free any successful allocations
+        free(result.request_id);
+        free(result.model);
+        free(result.content);
+        free(result.finish_reason);
+        memset(&result, 0, sizeof(result));
+        return result;
+    }
+
     result.is_final          = resp.is_final;
     result.prompt_tokens     = resp.prompt_tokens;
     result.completion_tokens = resp.completion_tokens;
@@ -245,10 +338,19 @@ inline llama_ServerStatus to_llama_status(const ServerStatus & status) {
     llama_ServerStatus result;
     memset(&result, 0, sizeof(result));
 
-    result.server_id        = dds_strdup(status.server_id.c_str());
+    result.server_id    = dds_strdup(status.server_id.c_str());
+    result.model_loaded = dds_strdup(status.model_loaded.c_str());
+
+    if (!result.server_id || !result.model_loaded) {
+        fprintf(stderr, "[DDS] OOM: dds_strdup failed in to_llama_status\n");
+        free(result.server_id);
+        free(result.model_loaded);
+        memset(&result, 0, sizeof(result));
+        return result;
+    }
+
     result.slots_idle       = status.slots_idle;
     result.slots_processing = status.slots_processing;
-    result.model_loaded     = dds_strdup(status.model_loaded.c_str());
     result.ready            = status.ready;
     return result;
 }

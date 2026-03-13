@@ -104,11 +104,14 @@ class DDSBridge {
     /// Returns true if at least one request is pending.  Thread-safe.
     bool has_pending_requests() const;
 
+    /// Decrement pending count for a request that failed before send_response(is_final=true).
+    /// Must be called exactly once per failed request to keep slot accounting correct.
+    void cancel_pending_request();
+
   private:
     void handle_request(const ChatCompletionRequest & request);
 
-    int                            domain_id_;
-    std::unique_ptr<DDSBridgeImpl> pimpl_;
+    int domain_id_;
 
     std::atomic<bool> running_{ false };
     std::atomic<bool> initialized_{ false };
@@ -120,6 +123,10 @@ class DDSBridge {
     mutable std::mutex                           mutex_;
     std::condition_variable                      cv_pending_;  // notified by handle_request() on every enqueue
     std::map<std::string, ChatCompletionRequest> pending_requests_;
+
+    // pimpl_ MUST be declared LAST: its destructor joins threads that
+    // access mutex_, cv_pending_, and pending_requests_ above.
+    std::unique_ptr<DDSBridgeImpl> pimpl_;
 };
 
 }  // namespace llama_dds

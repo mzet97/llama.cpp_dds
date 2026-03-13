@@ -5,7 +5,17 @@
  * writes per-request latencies to a CSV.  The orchestration script launches
  * multiple instances in parallel and aggregates afterwards.
  *
- * Usage: benchmark_multi_dds <num_runs> <csv_file> [model] [client_id]
+ * Usage: benchmark_multi_dds <num_runs> <csv_file> [model] [client_id] [start_delay_ms]
+ *
+ * start_delay_ms (default 2000): all clients sleep for this duration after server
+ * discovery before sending the first request.  When the orchestration script launches
+ * N instances simultaneously, this barrier gives every instance time to complete
+ * discovery so that requests are truly concurrent rather than staggered.
+ *
+ * NOTE: each client subscribes to the shared response topic and receives responses
+ * from ALL concurrent clients; non-matching responses (req_id mismatch) are discarded
+ * immediately.  At N clients this produces N-1 spurious waitset wakeups per request —
+ * acceptable overhead for the thesis scalability scenario (N ≤ 8).
  */
 
 #include "dds/dds.h"
@@ -25,7 +35,7 @@
 
 static const char * TOPIC_REQUEST  = "llama_chat_completion_request";
 static const char * TOPIC_RESPONSE = "llama_chat_completion_response";
-static const char * DEFAULT_MODEL  = "tinyllama";
+static const char * DEFAULT_MODEL  = "phi4-mini";
 
 struct PromptDef {
     const char * name;
@@ -128,10 +138,11 @@ static Stats compute_stats(std::vector<double> & v) {
 }
 
 int main(int argc, char * argv[]) {
-    int          num_runs  = 20;
-    const char * csv_path  = nullptr;
-    const char * model     = DEFAULT_MODEL;
-    int          client_id = 0;
+    int          num_runs       = 20;
+    const char * csv_path       = nullptr;
+    const char * model          = DEFAULT_MODEL;
+    int          client_id      = 0;
+    int          start_delay_ms = 2000;  // barrier delay after discovery
 
     if (argc > 1) {
         num_runs = atoi(argv[1]);
@@ -144,6 +155,9 @@ int main(int argc, char * argv[]) {
     }
     if (argc > 4) {
         client_id = atoi(argv[4]);
+    }
+    if (argc > 5) {
+        start_delay_ms = atoi(argv[5]);
     }
 
     // --- DDS init ---
@@ -194,6 +208,13 @@ int main(int argc, char * argv[]) {
         }
     }
 
+    // Barrier: wait for all parallel instances to complete discovery so that
+    // requests are truly concurrent rather than staggered.
+    if (start_delay_ms > 0) {
+        std::cerr << "[C" << client_id << "] waiting " << start_delay_ms << " ms for peer sync\n";
+        std::this_thread::sleep_for(std::chrono::milliseconds(start_delay_ms));
+    }
+
     dds_entity_t ws = dds_create_waitset(participant);
     dds_waitset_attach(ws, reader, DDS_DATA_AVAILABLE_STATUS);
     dds_attach_t ws_results[1];
@@ -202,7 +223,7 @@ int main(int argc, char * argv[]) {
     std::ofstream csv;
     if (csv_path) {
         csv.open(csv_path);
-        csv << "client_id,prompt_type,iteration,latency_ms\n";
+        csv << "model,client_id,prompt_type,iteration,latency_ms\n";
     }
 
     auto wall_start = std::chrono::steady_clock::now();
@@ -225,7 +246,7 @@ int main(int argc, char * argv[]) {
         for (int i = 0; i < num_runs; ++i) {
             double ms = send_one(writer, reader, ws, ws_results, PROMPTS[p].prompt, model);
             if (csv.is_open()) {
-                csv << client_id << "," << PROMPTS[p].name << "," << i << "," << ms << "\n";
+                csv << model << "," << client_id << "," << PROMPTS[p].name << "," << i << "," << ms << "\n";
             }
         }
     }

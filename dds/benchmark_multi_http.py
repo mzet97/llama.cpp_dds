@@ -6,7 +6,10 @@ Each process is a single HTTP client that sends N sequential requests and
 writes per-request latencies to a CSV.  The orchestration script launches
 multiple instances in parallel and aggregates afterwards.
 
-Usage: python benchmark_multi_http.py <num_runs> <csv_file> [model] [client_id] [host] [port]
+Usage: python benchmark_multi_http.py <num_runs> <csv_file> [model] [client_id] [start_delay_ms] [host] [port]
+
+start_delay_ms (default 2000): barrier sleep after connection so all parallel
+instances start sending requests at roughly the same time.
 """
 
 import csv
@@ -15,7 +18,7 @@ import json
 import sys
 import time
 
-DEFAULT_MODEL = "tinyllama"
+DEFAULT_MODEL = "phi4-mini"
 DEFAULT_HOST  = "127.0.0.1"
 DEFAULT_PORT  = 8080
 
@@ -47,12 +50,13 @@ def _send_one(conn: http.client.HTTPConnection, prompt: str, model: str) -> floa
 
 
 def main():
-    num_runs  = int(sys.argv[1]) if len(sys.argv) > 1 else 64  # N=64 for statistical significance per Cohen (1988)
-    csv_path  = sys.argv[2]      if len(sys.argv) > 2 else None
-    model     = sys.argv[3]      if len(sys.argv) > 3 else DEFAULT_MODEL
-    client_id = int(sys.argv[4]) if len(sys.argv) > 4 else 0
-    host      = sys.argv[5]      if len(sys.argv) > 5 else DEFAULT_HOST
-    port      = int(sys.argv[6]) if len(sys.argv) > 6 else DEFAULT_PORT
+    num_runs       = int(sys.argv[1]) if len(sys.argv) > 1 else 64  # N=64 for statistical significance per Cohen (1988)
+    csv_path       = sys.argv[2]      if len(sys.argv) > 2 else None
+    model          = sys.argv[3]      if len(sys.argv) > 3 else DEFAULT_MODEL
+    client_id      = int(sys.argv[4]) if len(sys.argv) > 4 else 0
+    start_delay_ms = int(sys.argv[5]) if len(sys.argv) > 5 else 2000
+    host           = sys.argv[6]      if len(sys.argv) > 6 else DEFAULT_HOST
+    port           = int(sys.argv[7]) if len(sys.argv) > 7 else DEFAULT_PORT
 
     conn = http.client.HTTPConnection(host, port, timeout=120)
 
@@ -61,7 +65,12 @@ def main():
     if csv_path:
         csv_file = open(csv_path, "w", newline="")
         writer = csv.writer(csv_file)
-        writer.writerow(["client_id", "prompt_type", "iteration", "latency_ms"])
+        writer.writerow(["model", "client_id", "prompt_type", "iteration", "latency_ms"])
+
+    # Barrier: sleep so all parallel instances start at the same time
+    if start_delay_ms > 0:
+        print(f"[C{client_id}] waiting {start_delay_ms} ms for peer sync", flush=True)
+        time.sleep(start_delay_ms / 1000.0)
 
     wall_start = time.monotonic()
 
@@ -73,7 +82,7 @@ def main():
         for i in range(num_runs):
             ms = _send_one(conn, prompt, model)
             if writer:
-                writer.writerow([client_id, pname, i, f"{ms:.3f}"])
+                writer.writerow([model, client_id, pname, i, f"{ms:.3f}"])
 
     wall_end = time.monotonic()
     wall_s   = wall_end - wall_start

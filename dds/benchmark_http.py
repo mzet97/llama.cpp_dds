@@ -14,7 +14,7 @@ HOST = "127.0.0.1"
 PORT = 8080
 NUM_TESTS = 64  # overridden by argv[1] - N=64 for statistical significance per Cohen (1988)
 
-MODEL = "tinyllama"  # must match the model loaded by the server
+MODEL = "phi4-mini"  # must match the model loaded by the server (phi4-mini, qwen3.5-9b, etc.)
 
 PROMPTS = [
     {"name": "simple", "prompt": "What is 2+2?"},
@@ -99,7 +99,7 @@ def main():
     csv_file = None
     if len(sys.argv) > 2:
         csv_file = open(sys.argv[2], "w")
-        csv_file.write("prompt_type,mean,std,p50,p95,p99\n")
+        csv_file.write("model,prompt_type,mean,std,p50,p95,p99\n")
 
     if len(sys.argv) > 3:
         MODEL = sys.argv[3]
@@ -151,7 +151,7 @@ def main():
         print(f"\nCSV: {p['name']},{mean:.2f},{stddev:.2f},{p50:.2f},{p95:.2f},{p99:.2f}")
 
         if csv_file:
-            csv_file.write(f"{p['name']},{mean:.2f},{stddev:.2f},{p50:.2f},{p95:.2f},{p99:.2f}\n")
+            csv_file.write(f"{MODEL},{p['name']},{mean:.2f},{stddev:.2f},{p50:.2f},{p95:.2f},{p99:.2f}\n")
 
     conn.close()
     if csv_file:

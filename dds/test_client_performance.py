@@ -38,14 +38,14 @@ def main():
 
     # Connect and send request
     print("Sending request...")
-    start_time = time.time()
+    start_time = time.perf_counter()
 
     try:
         conn = http.client.HTTPConnection(host, port, timeout=60)
         conn.request("POST", "/v1/chat/completions", body=payload, headers=headers)
         response = conn.getresponse()
 
-        end_time = time.time()
+        end_time = time.perf_counter()
         elapsed = end_time - start_time
 
         print(f"Status: {response.status}")
