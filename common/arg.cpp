@@ -2520,6 +2520,20 @@ common_params_context common_params_parser_init(common_params & params,
                 .set_examples({ LLAMA_EXAMPLE_SERVER })
                 .set_env("LLAMA_ARG_DDS_TIMEOUT"));
 
+    // gRPC options
+    add_opt(common_arg({ "--enable-grpc" }, { "--disable-grpc" }, "enable gRPC transport",
+                       [](common_params & params, bool value) { params.enable_grpc = value; })
+                .set_examples({ LLAMA_EXAMPLE_SERVER })
+                .set_env("LLAMA_ARG_ENABLE_GRPC"));
+    add_opt(common_arg({ "--grpc-address" }, "ADDR", "gRPC listen address (default: 0.0.0.0:50051)",
+                       [](common_params & params, const std::string & value) { params.grpc_address = value; })
+                .set_examples({ LLAMA_EXAMPLE_SERVER })
+                .set_env("LLAMA_ARG_GRPC_ADDRESS"));
+    add_opt(common_arg({ "--grpc-timeout" }, "SECONDS", "gRPC request timeout in seconds (default: 60)",
+                       [](common_params & params, int value) { params.grpc_timeout_secs = value; })
+                .set_examples({ LLAMA_EXAMPLE_SERVER })
+                .set_env("LLAMA_ARG_GRPC_TIMEOUT"));
+
     add_opt(common_arg({ "--path" }, "PATH",
                        string_format("path to serve static files from (default: %s)", params.public_path.c_str()),
                        [](common_params & params, const std::string & value) { params.public_path = value; })

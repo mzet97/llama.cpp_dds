@@ -579,6 +579,11 @@ struct common_params {
     int32_t dds_domain       = 0;      // DDS domain ID
     int32_t dds_timeout_secs = 60;     // request processing timeout (seconds)
 
+    // gRPC params
+    bool        enable_grpc      = false;           // enable gRPC transport
+    std::string grpc_address     = "0.0.0.0:50051"; // gRPC listen address
+    int32_t     grpc_timeout_secs = 60;             // request processing timeout (seconds)
+
     // batched-bench params
     bool is_pp_shared   = false;
     bool is_tg_separate = false;

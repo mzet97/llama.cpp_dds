@@ -69,6 +69,7 @@ class DDSTransportImpl {
             dds_qset_reliability(qos, DDS_RELIABILITY_RELIABLE, DDS_SECS(10));
             dds_qset_durability(qos, DDS_DURABILITY_TRANSIENT_LOCAL);
             dds_qset_history(qos, DDS_HISTORY_KEEP_LAST, 8);
+            dds_qset_transport_priority(qos, 0);  // TRANSPORT_PRIORITY: allows prioritization at DDS transport layer
 
             // Create reader for requests
             request_reader_ = dds_create_reader(participant_, request_topic_, qos, nullptr);
@@ -92,6 +93,8 @@ class DDSTransportImpl {
             dds_qset_reliability(status_qos, DDS_RELIABILITY_BEST_EFFORT, 0);
             dds_qset_durability(status_qos, DDS_DURABILITY_VOLATILE);
             dds_qset_history(status_qos, DDS_HISTORY_KEEP_LAST, 1);
+            dds_qset_deadline(status_qos, DDS_SECS(2));  // DEADLINE: data-level failure detection
+            dds_qset_liveliness(status_qos, DDS_LIVELINESS_AUTOMATIC, DDS_SECS(1));  // LIVELINESS: process failure detection
 
             // Create writer for status
             status_writer_ = dds_create_writer(participant_, status_topic_, status_qos, nullptr);
@@ -215,6 +218,7 @@ class DDSTransportImpl {
             dds_qset_reliability(qos, DDS_RELIABILITY_RELIABLE, DDS_SECS(10));
             dds_qset_durability(qos, DDS_DURABILITY_TRANSIENT_LOCAL);
             dds_qset_history(qos, DDS_HISTORY_KEEP_LAST, 8);
+            dds_qset_transport_priority(qos, 0);  // TRANSPORT_PRIORITY: matches server QoS
 
             request_writer_  = dds_create_writer(participant_, request_topic_, qos, nullptr);
             response_reader_ = dds_create_reader(participant_, response_topic_, qos, nullptr);
@@ -226,6 +230,8 @@ class DDSTransportImpl {
             dds_qset_reliability(status_qos, DDS_RELIABILITY_BEST_EFFORT, 0);
             dds_qset_durability(status_qos, DDS_DURABILITY_VOLATILE);
             dds_qset_history(status_qos, DDS_HISTORY_KEEP_LAST, 1);
+            dds_qset_deadline(status_qos, DDS_SECS(2));  // DEADLINE: data-level failure detection
+            dds_qset_liveliness(status_qos, DDS_LIVELINESS_AUTOMATIC, DDS_SECS(1));  // LIVELINESS: process failure detection
             status_reader_ = dds_create_reader(participant_, status_topic_, status_qos, nullptr);
             dds_delete_qos(status_qos);
 

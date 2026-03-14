@@ -14,6 +14,16 @@
 #    include "server-task.h"
 #endif
 
+#if defined(LLAMA_GRPC)
+#    include "grpc/grpc_bridge.h"
+#    if !defined(LLAMA_DDS)
+#        include "nlohmann/json.hpp"
+#        include "nlohmann/json_fwd.hpp"
+#        include "server-queue.h"
+#        include "server-task.h"
+#    endif
+#endif
+
 #include <signal.h>
 
 #include <atomic>
@@ -29,11 +39,11 @@
 static std::function<void(int)> shutdown_handler;
 static std::atomic_flag         is_terminating = ATOMIC_FLAG_INIT;
 
-#if defined(LLAMA_DDS)
+#if defined(LLAMA_DDS) || defined(LLAMA_GRPC)
 // Forward declaration of server context for accessing params
 struct server_context;
 
-// Convert DDS request to JSON for task creation
+// Convert request to JSON for task creation (shared by DDS and gRPC)
 static json dds_request_to_json(const llama_dds::ChatCompletionRequest & dds_req, const std::string & model_name) {
     json data = json::object();
 
@@ -77,23 +87,27 @@ static json dds_request_to_json(const llama_dds::ChatCompletionRequest & dds_req
     return data;
 }
 
-// Helper function to convert DDS request to server task and process it
-static void process_dds_request(llama_dds::DDSBridge *                   dds_bridge,
-                                const llama_dds::ChatCompletionRequest & dds_req,
-                                struct server_queue *                    queue_tasks,
-                                struct server_response *                 queue_results,
-                                const struct llama_vocab *               vocab,
-                                const std::string &                      model_name,
-                                const server_context_meta *              meta,        // C4/C5: proper chat pipeline
-                                const common_params *                    params_base  // C5: for params_from_json_cmpl
+// Helper function to convert request to server task and process it.
+// Templatized on BridgeT so it works with both DDSBridge and GRPCBridge,
+// which share the exact same public API.
+template <typename BridgeT>
+static void process_transport_request(BridgeT *                                bridge,
+                                      const llama_dds::ChatCompletionRequest & dds_req,
+                                      struct server_queue *                    queue_tasks,
+                                      struct server_response *                 queue_results,
+                                      const struct llama_vocab *               vocab,
+                                      const std::string &                      model_name,
+                                      const server_context_meta *              meta,
+                                      const common_params *                    params_base,
+                                      const char *                             tag  // "[DDS]" or "[gRPC]"
 ) {
-    LOG_INF("[DDS] Processing request: %s\n", dds_req.request_id.c_str());
+    LOG_INF("%s Processing request: %s\n", tag, dds_req.request_id.c_str());
 
     try {
     // Convert DDS request to JSON (ordered_json = server's `json` type for oaicompat calls)
     json data = dds_request_to_json(dds_req, model_name);
 
-    LOG_INF("[DDS] Request JSON: %s\n", data.dump(2).c_str());
+    LOG_INF("%s Request JSON: %s\n", tag, data.dump(2).c_str());
 
     // C4: Apply the model's actual chat template via the server pipeline.
     // Falls back to a hardcoded Phi template only when meta is unavailable
@@ -124,7 +138,7 @@ static void process_dds_request(llama_dds::DDSBridge *                   dds_bri
         data["prompt"] = prompt;
     }
 
-    LOG_INF("[DDS] Prompt: %s\n", prompt.substr(0, 100).c_str());
+    LOG_INF("%s Prompt: %s\n", tag, prompt.substr(0, 100).c_str());
 
     // M3: Use tokenize_input_prompts — same pipeline as the HTTP endpoint.
     // mctx=nullptr → text-only tokenization (DDS does not carry multimodal data).
@@ -138,17 +152,17 @@ static void process_dds_request(llama_dds::DDSBridge *                   dds_bri
         }
         tok_result = std::move(tok_vec[0]);
     } catch (const std::exception & ex) {
-        LOG_ERR("[DDS] Failed to tokenize prompt: %s\n", ex.what());
+        LOG_ERR("%s Failed to tokenize prompt: %s\n", tag, ex.what());
         llama_dds::ChatCompletionResponse resp;
         resp.request_id    = dds_req.request_id;
         resp.model         = dds_req.model.empty() ? model_name : dds_req.model;
-        resp.content       = std::string("[DDS] Error: Failed to tokenize prompt: ") + ex.what();
+        resp.content       = std::string(tag) + " Error: Failed to tokenize prompt: " + ex.what();
         resp.is_final      = true;
         resp.finish_reason = "error";
-        dds_bridge->send_response(resp);
+        bridge->send_response(resp);
         return;
     }
-    LOG_INF("[DDS] Tokenized to %zu tokens\n", tok_result.size());
+    LOG_INF("%s Tokenized to %zu tokens\n", tag, tok_result.size());
 
     // Create a task
     server_task task(SERVER_TASK_TYPE_COMPLETION);
@@ -166,7 +180,7 @@ static void process_dds_request(llama_dds::DDSBridge *                   dds_bri
         task.params.sampling.temp = dds_req.temperature > 0 ? dds_req.temperature : 0.7f;
     }
 
-    LOG_INF("[DDS] Posting task to queue, id=%d, tokens=%zu\n", task.id, task.tokens.size());
+    LOG_INF("%s Posting task to queue, id=%d, tokens=%zu\n", tag, task.id, task.tokens.size());
 
     // C6: Capture task_id before std::move(task) consumes it
     const int task_id = task.id;
@@ -178,7 +192,7 @@ static void process_dds_request(llama_dds::DDSBridge *                   dds_bri
     queue_tasks->post(std::move(task));
 
     // Wait for the result using the proper queue mechanism
-    LOG_INF("[DDS] Waiting for result (stream=%d)...\n", (int) dds_req.stream);
+    LOG_INF("%s Waiting for result (stream=%d)...\n", tag, (int) dds_req.stream);
 
     std::string generated_text;
     int         prompt_tokens     = 0;
@@ -197,7 +211,7 @@ static void process_dds_request(llama_dds::DDSBridge *                   dds_bri
         auto now     = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start_wait).count();
         if (elapsed > timeout_secs) {
-            LOG_WRN("[DDS] Timeout (%ds) waiting for final result\n", timeout_secs);
+            LOG_WRN("%s Timeout (%ds) waiting for final result\n", tag, timeout_secs);
             break;
         }
 
@@ -208,11 +222,11 @@ static void process_dds_request(llama_dds::DDSBridge *                   dds_bri
 
         if (result == nullptr) {
             // Timeout, continue waiting
-            LOG_INF("[DDS] Timeout waiting (attempt %d)\n", result_count);
+            LOG_INF("%s Timeout waiting (attempt %d)\n", tag, result_count);
             continue;
         }
 
-        LOG_INF("[DDS] Got result #%d\n", result_count);
+        LOG_INF("%s Got result #%d\n", tag, result_count);
 
         // Check if it's a final completion result
         auto * cmpl_final = dynamic_cast<server_task_result_cmpl_final *>(result.get());
@@ -243,14 +257,14 @@ static void process_dds_request(llama_dds::DDSBridge *                   dds_bri
                     chunk.is_final          = false;
                     chunk.prompt_tokens     = prompt_tokens;
                     chunk.completion_tokens = completion_tokens;
-                    dds_bridge->send_response(chunk);
+                    bridge->send_response(chunk);
                 }
                 generated_text = "";  // already streamed, nothing to send in final batch
             } else {
                 generated_text = cmpl_final->content;
             }
 
-            LOG_INF("[DDS] Got FINAL completion: %d prompt tokens, %d completion tokens\n", prompt_tokens,
+            LOG_INF("%s Got FINAL completion: %d prompt tokens, %d completion tokens\n", tag, prompt_tokens,
                     completion_tokens);
             is_final = true;
 
@@ -271,19 +285,19 @@ static void process_dds_request(llama_dds::DDSBridge *                   dds_bri
                         chunk.is_final          = false;
                         chunk.prompt_tokens     = prompt_tokens;
                         chunk.completion_tokens = completion_tokens;
-                        dds_bridge->send_response(chunk);
-                        LOG_INF("[DDS] Streamed chunk: %zu chars (n_decoded=%d)\n", cmpl_partial->content.size(),
+                        bridge->send_response(chunk);
+                        LOG_INF("%s Streamed chunk: %zu chars (n_decoded=%d)\n", tag, cmpl_partial->content.size(),
                                 completion_tokens);
                     }
                 } else {
                     // Non-streaming: accumulate
                     generated_text += cmpl_partial->content;
-                    LOG_INF("[DDS] Got partial: %zu chars total (n_decoded=%d)\n", generated_text.size(),
+                    LOG_INF("%s Got partial: %zu chars total (n_decoded=%d)\n", tag, generated_text.size(),
                             completion_tokens);
 
                     if (!cmpl_partial->is_progress && completion_tokens >= dds_req.max_tokens) {
                         finish_reason = "stop";
-                        LOG_INF("[DDS] Received full completion (%d tokens)\n", completion_tokens);
+                        LOG_INF("%s Received full completion (%d tokens)\n", tag, completion_tokens);
                         is_final = true;
                     }
                 }
@@ -293,14 +307,14 @@ static void process_dds_request(llama_dds::DDSBridge *                   dds_bri
                 if (error_result != nullptr) {
                     generated_text = "[Error: " + error_result->err_msg + "]";
                     finish_reason  = "error";
-                    LOG_ERR("[DDS] Task error: %s\n", error_result->err_msg.c_str());
+                    LOG_ERR("%s Task error: %s\n", tag, error_result->err_msg.c_str());
                     is_final = true;
                 }
             }
         }
     }
 
-    LOG_INF("[DDS] Sending final response\n");
+    LOG_INF("%s Sending final response\n", tag);
 
     // Send the terminal response — for streaming this carries is_final=true with empty content;
     // for non-streaming it carries the complete generated text.
@@ -313,61 +327,56 @@ static void process_dds_request(llama_dds::DDSBridge *                   dds_bri
     resp.prompt_tokens     = prompt_tokens;
     resp.completion_tokens = completion_tokens;
 
-    dds_bridge->send_response(resp);
+    bridge->send_response(resp);
 
     // C6: Remove task_id from waiting list after completion/timeout
     queue_results->remove_waiting_task_id(task_id);
 
-    LOG_INF("[DDS] Response sent for request: %s\n", dds_req.request_id.c_str());
+    LOG_INF("%s Response sent for request: %s\n", tag, dds_req.request_id.c_str());
     } catch (const std::exception & ex) {
-        LOG_ERR("[DDS] Unhandled exception processing request %s: %s\n", dds_req.request_id.c_str(), ex.what());
+        LOG_ERR("%s Unhandled exception processing request %s: %s\n", tag, dds_req.request_id.c_str(), ex.what());
         // Ensure pending count is decremented via a final error response
         llama_dds::ChatCompletionResponse err_resp;
         err_resp.request_id    = dds_req.request_id;
         err_resp.model         = model_name;
-        err_resp.content       = std::string("[DDS] Internal error: ") + ex.what();
+        err_resp.content       = std::string(tag) + " Internal error: " + ex.what();
         err_resp.is_final      = true;
         err_resp.finish_reason = "error";
-        dds_bridge->send_response(err_resp);
+        bridge->send_response(err_resp);
     } catch (...) {
-        LOG_ERR("[DDS] Unknown exception processing request %s\n", dds_req.request_id.c_str());
-        dds_bridge->cancel_pending_request();
+        LOG_ERR("%s Unknown exception processing request %s\n", tag, dds_req.request_id.c_str());
+        bridge->cancel_pending_request();
     }
 }
 
-// DDS polling thread function
-static void dds_poll_loop(llama_dds::DDSBridge *      dds_bridge,
-                          struct server_queue *       queue_tasks,
-                          struct server_response *    queue_results,
-                          const struct llama_vocab *  vocab,
-                          std::atomic<bool> *         running,
-                          const std::string &         model_name,
-                          const server_context_meta * meta,        // Fase 2: typed, replaces void*
-                          const common_params *       params_base  // Fase 2: for params_from_json_cmpl
+// Transport polling thread function — templatized for DDSBridge and GRPCBridge.
+template <typename BridgeT>
+static void transport_poll_loop(BridgeT *                       bridge,
+                                struct server_queue *            queue_tasks,
+                                struct server_response *         queue_results,
+                                const struct llama_vocab *       vocab,
+                                std::atomic<bool> *              running,
+                                const std::string &              model_name,
+                                const server_context_meta *      meta,
+                                const common_params *            params_base,
+                                const char *                     tag  // "[DDS]" or "[gRPC]"
 ) {
-    LOG_INF("[DDS] Polling thread started\n");
+    LOG_INF("%s Polling thread started\n", tag);
 
     // Track in-flight worker count so we can drain at shutdown.
     std::atomic<int> in_flight{ 0 };
 
     while (running->load()) {
-        // Block until a request arrives or the timeout elapses.
-        // Using 5000ms ceiling — the condition variable wakes us instantly whenever
-        // handle_request() calls cv_pending_.notify_one(), so this large timeout
-        // only matters for shutdown detection.  Previous 50ms timeout caused a
-        // ~25ms average artificial floor on every request latency (FASE 2.1 fix).
-        dds_bridge->wait_for_request(std::chrono::milliseconds(5000));
+        bridge->wait_for_request(std::chrono::milliseconds(5000));
 
         llama_dds::ChatCompletionRequest req;
-        // Drain all queued requests, dispatching each to its own detached thread
-        // so inference runs concurrently — mirrors the HTTP server threading model.
-        while (dds_bridge->pop_pending_request(req)) {
+        while (bridge->pop_pending_request(req)) {
             in_flight.fetch_add(1);
             std::thread(
-                [dds_bridge, queue_tasks, queue_results, vocab, &model_name, meta, params_base,
-                 &in_flight](llama_dds::ChatCompletionRequest r) {
-                    process_dds_request(dds_bridge, r, queue_tasks, queue_results, vocab, model_name, meta,
-                                        params_base);
+                [bridge, queue_tasks, queue_results, vocab, &model_name, meta, params_base,
+                 &in_flight, tag](llama_dds::ChatCompletionRequest r) {
+                    process_transport_request(bridge, r, queue_tasks, queue_results, vocab, model_name, meta,
+                                              params_base, tag);
                     in_flight.fetch_sub(1);
                 },
                 std::move(req))
@@ -380,7 +389,7 @@ static void dds_poll_loop(llama_dds::DDSBridge *      dds_bridge,
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 
-    LOG_INF("[DDS] Polling thread stopped\n");
+    LOG_INF("%s Polling thread stopped\n", tag);
 }
 #endif
 
@@ -510,6 +519,29 @@ int main(int argc, char ** argv) {
     }
 #endif
 
+#if defined(LLAMA_GRPC)
+    std::unique_ptr<llama_grpc::GRPCBridge> grpc_bridge;
+    std::thread                              grpc_poll_thread;
+    std::atomic<bool>                        grpc_running{ false };
+    std::unique_ptr<server_context_meta>     grpc_meta;
+
+    if (params.enable_grpc) {
+        LOG_INF("%s: initializing gRPC transport on %s\n", __func__, params.grpc_address.c_str());
+        grpc_bridge = std::make_unique<llama_grpc::GRPCBridge>(params.grpc_address);
+        if (!grpc_bridge->init()) {
+            LOG_ERR("%s: failed to initialize gRPC bridge\n", __func__);
+            return 1;
+        }
+        if (!grpc_bridge->start()) {
+            LOG_ERR("%s: failed to start gRPC bridge\n", __func__);
+            return 1;
+        }
+
+        grpc_running = true;
+        LOG_INF("%s: gRPC transport enabled on %s\n", __func__, params.grpc_address.c_str());
+    }
+#endif
+
     //
     // Router
     //
@@ -628,12 +660,24 @@ int main(int argc, char ** argv) {
         // Start DDS polling thread for router mode (no model needed)
         if (dds_bridge && dds_running.load()) {
             std::string model_name = "router";
-            // Fase 2: router mode has no model loaded, meta is null
-            dds_poll_thread        = std::thread(dds_poll_loop, dds_bridge.get(), &ctx_server.get_queue(),
+            dds_poll_thread        = std::thread(transport_poll_loop<llama_dds::DDSBridge>,
+                                                 dds_bridge.get(), &ctx_server.get_queue(),
                                                  &ctx_server.get_response_queue(), ctx_server.get_vocab(), &dds_running,
                                                  model_name, static_cast<const server_context_meta *>(nullptr),
-                                                 &params);  // Fase 2: common_params
+                                                 &params, "[DDS]");
             LOG_INF("%s: DDS polling thread started (router mode)\n", __func__);
+        }
+#endif
+
+#if defined(LLAMA_GRPC)
+        if (grpc_bridge && grpc_running.load()) {
+            std::string model_name = "router";
+            grpc_poll_thread       = std::thread(transport_poll_loop<llama_grpc::GRPCBridge>,
+                                                 grpc_bridge.get(), &ctx_server.get_queue(),
+                                                 &ctx_server.get_response_queue(), ctx_server.get_vocab(), &grpc_running,
+                                                 model_name, static_cast<const server_context_meta *>(nullptr),
+                                                 &params, "[gRPC]");
+            LOG_INF("%s: gRPC polling thread started (router mode)\n", __func__);
         }
 #endif
 
@@ -684,15 +728,36 @@ int main(int argc, char ** argv) {
 
         // Start DDS polling thread after model is loaded
         if (dds_bridge && dds_running.load()) {
-            // Get model name from params (fallback to param value)
             std::string model_name = params.model.name.empty() ? "unknown" : params.model.name;
 
             dds_poll_thread =
-                std::thread(dds_poll_loop, dds_bridge.get(), &ctx_server.get_queue(), &ctx_server.get_response_queue(),
+                std::thread(transport_poll_loop<llama_dds::DDSBridge>,
+                            dds_bridge.get(), &ctx_server.get_queue(), &ctx_server.get_response_queue(),
                             ctx_server.get_vocab(), &dds_running, model_name,
-                            dds_meta.get(),  // Fase 2: real meta after load_model()
-                            &params);        // Fase 2: common_params
+                            dds_meta.get(), &params, "[DDS]");
             LOG_INF("%s: DDS polling thread started\n", __func__);
+        }
+#endif
+
+#if defined(LLAMA_GRPC)
+        if (grpc_bridge) {
+            std::string model_name_str = params.model.name.empty() ? "unknown" : params.model.name;
+            grpc_bridge->set_model_info(model_name_str, true, params.n_parallel);
+        }
+
+        if (grpc_bridge) {
+            grpc_meta = std::make_unique<server_context_meta>(ctx_server.get_meta());
+        }
+
+        if (grpc_bridge && grpc_running.load()) {
+            std::string model_name = params.model.name.empty() ? "unknown" : params.model.name;
+
+            grpc_poll_thread =
+                std::thread(transport_poll_loop<llama_grpc::GRPCBridge>,
+                            grpc_bridge.get(), &ctx_server.get_queue(), &ctx_server.get_response_queue(),
+                            ctx_server.get_vocab(), &grpc_running, model_name,
+                            grpc_meta.get(), &params, "[gRPC]");
+            LOG_INF("%s: gRPC polling thread started\n", __func__);
         }
 #endif
 
@@ -750,6 +815,18 @@ int main(int argc, char ** argv) {
             }
             dds_bridge->stop();
             LOG_INF("%s: DDS polling thread stopped\n", __func__);
+        }
+#endif
+
+#if defined(LLAMA_GRPC)
+        // Stop gRPC polling thread
+        if (grpc_bridge) {
+            grpc_running = false;
+            if (grpc_poll_thread.joinable()) {
+                grpc_poll_thread.join();
+            }
+            grpc_bridge->stop();
+            LOG_INF("%s: gRPC polling thread stopped\n", __func__);
         }
 #endif
 

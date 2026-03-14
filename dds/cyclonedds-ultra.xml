@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  CycloneDDS Ultra-Low-Latency Configuration
+  ============================================
+  Optimized for minimum latency on localhost / WSL.
+
+  Changes vs cyclonedds-local.xml:
+    1. SynchronousDeliveryPriorityThreshold=0
+       → Data processed directly in recv thread (saves ~5-10us per message)
+    2. HeartbeatInterval=5ms (was 10ms)
+       → Faster RELIABLE ack round-trip
+    3. Discovery/LeaseDuration=500ms
+       → Fast participant-level failure detection via LIVELINESS
+    4. SPDPInterval=100ms
+       → More frequent discovery for LIVELINESS assertions
+    5. MaxMessageSize=65500B
+       → Avoid fragmentation overhead
+    6. Tracing disabled
+       → Zero logging overhead in hot path
+
+  References:
+    - CycloneDDS Data Path Config: synchronous delivery mode
+      https://cyclonedds.io/docs/cyclonedds/latest/config/data-path-config.html
+    - Liang et al. 2023 (arXiv:2303.09419): CycloneDDS ~8us latency
+    - Sciangula et al. ECRTS 2023: formal DDS latency bounds
+-->
+<CycloneDDS xmlns="https://cdds.io/config"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="https://cdds.io/config https://raw.githubusercontent.com/eclipse-cyclonedds/cyclonedds/master/etc/cyclonedds.xsd">
+
+    <Domain id="any">
+        <General>
+            <!-- Bind to loopback only — avoids multicast / NIC enumeration. -->
+            <Interfaces>
+                <NetworkInterface address="127.0.0.1" />
+            </Interfaces>
+            <AllowMulticast>false</AllowMulticast>
+            <!-- Max UDP payload — avoids fragmentation overhead. -->
+            <MaxMessageSize>65500B</MaxMessageSize>
+        </General>
+
+        <Discovery>
+            <MaxAutoParticipantIndex>9</MaxAutoParticipantIndex>
+            <!-- Frequent SPDP for fast LIVELINESS assertion (default ~30s). -->
+            <SPDPInterval>100ms</SPDPInterval>
+            <!-- Participant lease: controls LIVELINESS AUTOMATIC detection.
+                 When a participant dies, peers detect it within LeaseDuration.
+                 500ms is aggressive but safe on localhost. -->
+            <LeaseDuration>500ms</LeaseDuration>
+        </Discovery>
+
+        <Internal>
+            <!-- Aggressive heartbeat for faster RELIABLE ack round-trip. -->
+            <HeartbeatInterval>5ms</HeartbeatInterval>
+            <!-- Don't linger after write; deliver immediately. -->
+            <WriterLingerDuration>0ms</WriterLingerDuration>
+            <!-- Reduce nack delay for faster retransmit. -->
+            <NackDelay>0ms</NackDelay>
+
+            <!-- SYNCHRONOUS DELIVERY: process data directly in the recv thread
+                 instead of queuing for async delivery. Saves ~5-10us per message.
+                 PriorityThreshold=0 means ALL data uses synchronous delivery.
+                 LatencyBound=inf means no time limit on synchronous processing. -->
+            <SynchronousDeliveryPriorityThreshold>0</SynchronousDeliveryPriorityThreshold>
+            <SynchronousDeliveryLatencyBound>inf</SynchronousDeliveryLatencyBound>
+
+            <!-- Writer History Cache tuned for throughput under burst. -->
+            <Watermarks>
+                <WhcHigh>500kB</WhcHigh>
+            </Watermarks>
+        </Internal>
+
+        <Tracing>
+            <!-- Disable ALL tracing in production/benchmarks for zero overhead. -->
+            <Verbosity>none</Verbosity>
+        </Tracing>
+    </Domain>
+</CycloneDDS>

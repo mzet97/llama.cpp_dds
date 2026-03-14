@@ -64,6 +64,12 @@ if (LLAMA_DDS)
     target_compile_definitions(${TARGET} PRIVATE LLAMA_DDS=1)
 endif()
 
+if (LLAMA_GRPC)
+    target_link_libraries(${TARGET} PRIVATE llama-grpc)
+    target_compile_definitions(${TARGET} PRIVATE LLAMA_GRPC=1)
+    target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR}/dds)
+endif()
+
 if (WIN32)
     TARGET_LINK_LIBRARIES(${TARGET} PRIVATE ws2_32)
 endif()

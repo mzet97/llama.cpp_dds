@@ -115,6 +115,7 @@ option(LLAMA_TESTS_INSTALL  "llama: install tests"        ON)
 option(LLAMA_OPENSSL    "llama: use openssl to support HTTPS" ON)
 option(LLAMA_LLGUIDANCE "llama-common: include LLGuidance library for structured output in common utils" OFF)
 option(LLAMA_DDS "llama: enable DDS (CycloneDDS) transport support" OFF)
+option(LLAMA_GRPC "llama: enable gRPC transport support" OFF)
 
 
 # Required for relocatable CMake package
@@ -217,6 +218,10 @@ endif()
 
 if (LLAMA_DDS)
     add_subdirectory(dds)
+endif()
+
+if (LLAMA_GRPC)
+    add_subdirectory(grpc)
 endif()
 
 # Automatically add all files from the 'licenses' directory
