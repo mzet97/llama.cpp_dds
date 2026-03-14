@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  CycloneDDS Ultra-Low-Latency Configuration for NETWORK
+  ========================================================
+  Same optimizations as cyclonedds-ultra.xml but for cross-VM communication.
+  Uses real network interface instead of loopback.
+
+  For VMs: 192.168.1.60, 192.168.1.61, 192.168.1.62
+-->
+<CycloneDDS xmlns="https://cdds.io/config"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="https://cdds.io/config https://raw.githubusercontent.com/eclipse-cyclonedds/cyclonedds/master/etc/cyclonedds.xsd">
+
+    <Domain id="any">
+        <General>
+            <!-- Use real network interface for cross-VM communication -->
+            <AllowMulticast>true</AllowMulticast>
+            <MaxMessageSize>65500B</MaxMessageSize>
+        </General>
+
+        <Discovery>
+            <MaxAutoParticipantIndex>30</MaxAutoParticipantIndex>
+            <SPDPInterval>100ms</SPDPInterval>
+            <LeaseDuration>500ms</LeaseDuration>
+        </Discovery>
+
+        <Internal>
+            <HeartbeatInterval>5ms</HeartbeatInterval>
+            <WriterLingerDuration>0ms</WriterLingerDuration>
+            <NackDelay>0ms</NackDelay>
+            <SynchronousDeliveryPriorityThreshold>0</SynchronousDeliveryPriorityThreshold>
+            <SynchronousDeliveryLatencyBound>inf</SynchronousDeliveryLatencyBound>
+            <Watermarks>
+                <WhcHigh>500kB</WhcHigh>
+            </Watermarks>
+        </Internal>
+
+        <Tracing>
+            <Verbosity>none</Verbosity>
+        </Tracing>
+    </Domain>
+</CycloneDDS>
