@@ -55,10 +55,20 @@ class LlamaServiceImpl final : public llama_grpc::LlamaService::Service {
             on_request_(cpp_req);
         }
 
-        // Block until the response is ready (send_response sets done=true on is_final)
+        // Block until the response is ready, with timeout to prevent indefinite hang.
+        // send_response() sets done=true when is_final response arrives.
         {
             std::unique_lock<std::mutex> lk(state->mtx);
-            state->cv.wait(lk, [&] { return state->done; });
+            bool ok = state->cv.wait_for(lk, std::chrono::seconds(120),
+                                          [&] { return state->done; });
+            if (!ok) {
+                fprintf(stderr, "[gRPC] Chat timeout (120s) for request: %s\n",
+                        cpp_req.request_id.c_str());
+                std::lock_guard<std::mutex> slk(streams_mutex_);
+                active_streams_.erase(cpp_req.request_id);
+                return grpc::Status(grpc::StatusCode::DEADLINE_EXCEEDED,
+                                    "Inference timed out after 120s");
+            }
         }
 
         // Collect the final response
@@ -100,10 +110,19 @@ class LlamaServiceImpl final : public llama_grpc::LlamaService::Service {
             on_request_(cpp_req);
         }
 
-        // Block until done — the writer is used by send_response() from another thread
+        // Block until done, with timeout. The writer is used by send_response() from another thread.
         {
             std::unique_lock<std::mutex> lk(state->mtx);
-            state->cv.wait(lk, [&] { return state->done; });
+            bool ok = state->cv.wait_for(lk, std::chrono::seconds(120),
+                                          [&] { return state->done; });
+            if (!ok) {
+                fprintf(stderr, "[gRPC] StreamChat timeout (120s) for request: %s\n",
+                        cpp_req.request_id.c_str());
+                std::lock_guard<std::mutex> slk(streams_mutex_);
+                active_streams_.erase(cpp_req.request_id);
+                return grpc::Status(grpc::StatusCode::DEADLINE_EXCEEDED,
+                                    "Streaming inference timed out after 120s");
+            }
         }
 
         {
@@ -247,6 +266,17 @@ class GRPCTransportImpl {
             client_thread_.join();
         }
 
+        // Join all inflight request threads
+        {
+            std::lock_guard<std::mutex> lk(inflight_mutex_);
+            for (auto & t : inflight_threads_) {
+                if (t.joinable()) {
+                    t.join();
+                }
+            }
+            inflight_threads_.clear();
+        }
+
         fprintf(stderr, "[gRPC] Transport stopped\n");
     }
 
@@ -299,27 +329,41 @@ class GRPCTransportImpl {
         auto response_callback = response_callback_;
         auto request_id        = request.request_id;
 
-        std::thread([stub_ptr, proto_req, response_callback, request_id]() {
-            grpc::ClientContext context;
-            auto reader = stub_ptr->StreamChat(&context, proto_req);
+        // Track thread for clean shutdown (was .detach() — caused use-after-free)
+        {
+            std::lock_guard<std::mutex> lk(inflight_mutex_);
+            // Clean up finished threads first
+            inflight_threads_.erase(
+                std::remove_if(inflight_threads_.begin(), inflight_threads_.end(),
+                    [](std::thread & t) {
+                        if (t.joinable()) { return false; }
+                        return true;
+                    }),
+                inflight_threads_.end());
 
-            llama_grpc::ChatCompletionResponse proto_resp;
-            while (reader->Read(&proto_resp)) {
-                if (response_callback) {
-                    try {
-                        response_callback(from_proto(proto_resp));
-                    } catch (const std::exception & e) {
-                        fprintf(stderr, "[gRPC Client] response callback error: %s\n", e.what());
+            inflight_threads_.emplace_back([stub_ptr, proto_req, response_callback, request_id]() {
+                grpc::ClientContext context;
+                context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(120));
+                auto reader = stub_ptr->StreamChat(&context, proto_req);
+
+                llama_grpc::ChatCompletionResponse proto_resp;
+                while (reader->Read(&proto_resp)) {
+                    if (response_callback) {
+                        try {
+                            response_callback(from_proto(proto_resp));
+                        } catch (const std::exception & e) {
+                            fprintf(stderr, "[gRPC Client] response callback error: %s\n", e.what());
+                        }
                     }
                 }
-            }
 
-            grpc::Status status = reader->Finish();
-            if (!status.ok()) {
-                fprintf(stderr, "[gRPC Client] StreamChat failed for %s: %s\n",
-                        request_id.c_str(), status.error_message().c_str());
-            }
-        }).detach();
+                grpc::Status status = reader->Finish();
+                if (!status.ok()) {
+                    fprintf(stderr, "[gRPC Client] StreamChat failed for %s: %s\n",
+                            request_id.c_str(), status.error_message().c_str());
+                }
+            });
+        }
 
         fprintf(stderr, "[gRPC Client] Request sent: id=%s\n", request.request_id.c_str());
     }
@@ -337,6 +381,10 @@ class GRPCTransportImpl {
     GRPCTransport::ResponseCallback                  response_callback_;
     GRPCTransport::StatusCallback                    status_callback_;
     std::thread                                      client_thread_;
+
+    // Track inflight request threads for clean shutdown
+    std::vector<std::thread>                         inflight_threads_;
+    std::mutex                                       inflight_mutex_;
 };
 
 // ═══════════════════════════════════════════════════════════════════════

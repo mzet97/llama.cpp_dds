@@ -26,10 +26,14 @@ class DDSBridgeImpl {
 
         running_ = true;
 
-        // Start status publishing thread
+        // Start status publishing thread with cancellable sleep
         worker_thread_ = std::thread([this]() {
             while (running_) {
-                std::this_thread::sleep_for(std::chrono::seconds(5));
+                {
+                    std::unique_lock<std::mutex> lk(stop_mutex_);
+                    stop_cv_.wait_for(lk, std::chrono::seconds(5),
+                                      [this] { return !running_.load(); });
+                }
 
                 if (!running_) {
                     break;
@@ -57,6 +61,7 @@ class DDSBridgeImpl {
 
     void stop() {
         running_ = false;
+        stop_cv_.notify_all();
 
         if (worker_thread_.joinable()) {
             worker_thread_.join();
@@ -108,6 +113,8 @@ class DDSBridgeImpl {
 
     // Model state snapshot for the status-publishing thread.
     mutable std::mutex status_mutex_;
+    std::mutex         stop_mutex_;
+    std::condition_variable stop_cv_;
     std::string        model_loaded_;
     bool               model_ready_{ false };
     int                total_slots_{ 1 };  // copied from params.n_parallel

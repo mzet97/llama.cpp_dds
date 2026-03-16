@@ -26,10 +26,15 @@ class GRPCBridgeImpl {
 
         running_ = true;
 
-        // Start status publishing thread (mirrors DDSBridgeImpl)
+        // Start status publishing thread with cancellable sleep
         worker_thread_ = std::thread([this]() {
             while (running_) {
-                std::this_thread::sleep_for(std::chrono::seconds(5));
+                // Use condition variable wait instead of sleep_for for fast shutdown
+                {
+                    std::unique_lock<std::mutex> lk(stop_mutex_);
+                    stop_cv_.wait_for(lk, std::chrono::seconds(5),
+                                      [this] { return !running_.load(); });
+                }
 
                 if (!running_) {
                     break;
@@ -55,6 +60,8 @@ class GRPCBridgeImpl {
 
     void stop() {
         running_ = false;
+        // Wake worker thread from sleep immediately
+        stop_cv_.notify_all();
 
         if (worker_thread_.joinable()) {
             worker_thread_.join();
@@ -105,6 +112,8 @@ class GRPCBridgeImpl {
     std::string       address_;
 
     mutable std::mutex status_mutex_;
+    std::mutex         stop_mutex_;
+    std::condition_variable stop_cv_;
     std::string        model_loaded_;
     bool               model_ready_{ false };
     int                total_slots_{ 1 };
