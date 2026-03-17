@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  CycloneDDS Optimized Configuration for Cross-VM LLM Orchestration
+  ==================================================================
+  Combines all performance optimizations from research:
+  - Synchronous delivery (bypass async queue)
+  - Static peers (avoid multicast scanning)
+  - Socket buffer tuning (prevent drops under burst)
+  - Aggressive heartbeat/nack
+  - Reduced discovery overhead
+
+  For VMs: 192.168.1.60, 192.168.1.61, 192.168.1.62, 192.168.1.63
+-->
+<CycloneDDS xmlns="https://cdds.io/config"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="https://cdds.io/config https://raw.githubusercontent.com/eclipse-cyclonedds/cyclonedds/master/etc/cyclonedds.xsd">
+
+    <Domain id="any">
+        <General>
+            <!-- Multicast only for SPDP discovery; data via unicast -->
+            <AllowMulticast>spdp</AllowMulticast>
+            <!-- Max UDP payload to avoid IP fragmentation -->
+            <MaxMessageSize>65500B</MaxMessageSize>
+        </General>
+
+        <Discovery>
+            <!-- Static peers: known VM addresses -->
+            <Peers>
+                <Peer address="192.168.1.60"/>
+                <Peer address="192.168.1.61"/>
+                <Peer address="192.168.1.62"/>
+                <Peer address="192.168.1.63"/>
+            </Peers>
+            <!-- Only scan 5 participant indices (not 30) -->
+            <MaxAutoParticipantIndex>5</MaxAutoParticipantIndex>
+            <!-- Fast initial discovery -->
+            <SPDPInterval>50ms</SPDPInterval>
+            <!-- Fast failure detection -->
+            <LeaseDuration>500ms</LeaseDuration>
+        </Discovery>
+
+        <Internal>
+            <!-- Synchronous delivery: process data inline in receive thread -->
+            <SynchronousDeliveryPriorityThreshold>0</SynchronousDeliveryPriorityThreshold>
+            <SynchronousDeliveryLatencyBound>inf</SynchronousDeliveryLatencyBound>
+
+            <!-- Aggressive heartbeat for reliable topics -->
+            <HeartbeatInterval>5ms</HeartbeatInterval>
+            <!-- No linger: send immediately on close -->
+            <WriterLingerDuration>0ms</WriterLingerDuration>
+            <!-- No NACK delay: respond to missing data immediately -->
+            <NackDelay>0ms</NackDelay>
+
+            <!-- Socket buffers: 2MB to handle LLM response bursts -->
+            <SocketReceiveBufferSize min="2MB"/>
+            <SocketSendBufferSize min="2MB"/>
+
+            <!-- Writer History Cache for burst absorption -->
+            <Watermarks>
+                <WhcHigh>500kB</WhcHigh>
+            </Watermarks>
+        </Internal>
+
+        <Tracing>
+            <Verbosity>none</Verbosity>
+        </Tracing>
+    </Domain>
+</CycloneDDS>
