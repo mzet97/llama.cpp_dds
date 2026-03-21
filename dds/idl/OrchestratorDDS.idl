@@ -44,6 +44,7 @@ module orchestrator {
         string context_id;       // Context ID if needed
         long long created_at;   // Creation timestamp (epoch ms)
         boolean stream;          // Whether to stream the response
+        string target_agent_id; // Target agent ID (empty = broadcast)
     };
 
     // Task response from agent to orchestrator
