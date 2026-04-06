@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  CycloneDDS Config for VMs — Includes Windows Host (192.168.1.11) as Peer
+  ========================================================================
+  Used by: Orchestrator (.62), VM agents (.60, .61)
+  Replaces: cyclonedds-network-optimized.xml when WSL2 agent is in the cluster
+
+  Peers: 192.168.1.11 (WSL2 host), .60, .61, .62, .63
+-->
+<CycloneDDS xmlns="https://cdds.io/config"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="https://cdds.io/config https://raw.githubusercontent.com/eclipse-cyclonedds/cyclonedds/master/etc/cyclonedds.xsd">
+
+    <Domain id="any">
+        <General>
+            <AllowMulticast>spdp</AllowMulticast>
+            <MaxMessageSize>65500B</MaxMessageSize>
+        </General>
+
+        <Discovery>
+            <Peers>
+                <Peer address="192.168.1.11"/>
+                <Peer address="192.168.1.60"/>
+                <Peer address="192.168.1.61"/>
+                <Peer address="192.168.1.62"/>
+                <Peer address="192.168.1.63"/>
+            </Peers>
+            <MaxAutoParticipantIndex>30</MaxAutoParticipantIndex>
+            <SPDPInterval>50ms</SPDPInterval>
+            <LeaseDuration>500ms</LeaseDuration>
+        </Discovery>
+
+        <Internal>
+            <SynchronousDeliveryPriorityThreshold>0</SynchronousDeliveryPriorityThreshold>
+            <SynchronousDeliveryLatencyBound>inf</SynchronousDeliveryLatencyBound>
+            <HeartbeatInterval>5ms</HeartbeatInterval>
+            <WriterLingerDuration>0ms</WriterLingerDuration>
+            <NackDelay>0ms</NackDelay>
+            <SocketReceiveBufferSize min="2MB"/>
+            <SocketSendBufferSize min="2MB"/>
+            <Watermarks>
+                <WhcHigh>500kB</WhcHigh>
+            </Watermarks>
+        </Internal>
+
+        <Tracing>
+            <Verbosity>none</Verbosity>
+        </Tracing>
+    </Domain>
+</CycloneDDS>
