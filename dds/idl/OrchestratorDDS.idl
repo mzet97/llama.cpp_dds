@@ -71,6 +71,9 @@ module orchestrator {
         long timeout_ms;         // Timeout in ms
         boolean requires_context;
         long long created_at;    // Creation timestamp (epoch ms)
+        boolean stream;          // Whether to stream the response
+        long max_tokens;         // Max tokens to generate (0 = use default)
+        float temperature;       // Sampling temperature (-1 = use default)
     };
 
     // Client response (orchestrator to external client)

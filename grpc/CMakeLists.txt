@@ -12,7 +12,10 @@ elseif (DEFINED ENV{GRPC_ROOT})
     message(STATUS "[gRPC] Using GRPC_ROOT from environment: $ENV{GRPC_ROOT}")
 endif()
 
-find_package(Protobuf QUIET)
+# IMPORTANT: use CONFIG mode for both — mixing module-mode Protobuf with
+# config-mode gRPC causes "targets already defined" errors when the system
+# protobuf is recent enough to ship libupb (e.g. brew protobuf@29+).
+find_package(Protobuf CONFIG QUIET)
 find_package(gRPC QUIET CONFIG)
 
 if (NOT Protobuf_FOUND)
@@ -33,8 +36,16 @@ message(STATUS "Protobuf found: ${Protobuf_CONFIG}")
 # Find protoc and grpc_cpp_plugin executables
 find_program(PROTOC_EXECUTABLE protoc HINTS ${Protobuf_PROTOC_EXECUTABLE})
 if (TARGET protobuf::protoc)
-    get_target_property(PROTOC_EXECUTABLE protobuf::protoc IMPORTED_LOCATION)
+    get_target_property(_protoc_loc protobuf::protoc IMPORTED_LOCATION)
+    if (_protoc_loc AND NOT _protoc_loc STREQUAL "_protoc_loc-NOTFOUND")
+        set(PROTOC_EXECUTABLE "${_protoc_loc}")
+    endif()
 endif()
+# Last-resort fallback: search PATH
+if (NOT PROTOC_EXECUTABLE OR PROTOC_EXECUTABLE STREQUAL "PROTOC_EXECUTABLE-NOTFOUND")
+    find_program(PROTOC_EXECUTABLE protoc PATHS /opt/homebrew/bin /usr/local/bin /usr/bin)
+endif()
+message(STATUS "[gRPC] protoc: ${PROTOC_EXECUTABLE}")
 
 if (TARGET gRPC::grpc_cpp_plugin)
     get_target_property(GRPC_CPP_PLUGIN gRPC::grpc_cpp_plugin IMPORTED_LOCATION)

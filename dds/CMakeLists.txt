@@ -39,6 +39,8 @@ set(DDS_SOURCES
 
 add_library(llama-dds OBJECT ${DDS_SOURCES})
 
+target_compile_features(llama-dds PUBLIC cxx_std_17)
+
 target_include_directories(llama-dds PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/idl

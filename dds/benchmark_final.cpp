@@ -54,7 +54,7 @@ static double send_one(dds_entity_t   writer,
     req.request_id                  = dds_string_dup(req_id.c_str());
     req.model                       = dds_string_dup(model_name);
     req.temperature                 = 0.3f;
-    req.max_tokens                  = 30;
+    req.max_tokens                  = 1;  // patched to isolate DDS overhead
     req.stream                      = false;
     req.messages._maximum           = 1;
     req.messages._length            = 1;

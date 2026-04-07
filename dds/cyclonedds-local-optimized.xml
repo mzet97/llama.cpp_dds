@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  CycloneDDS Optimized Local Configuration (loopback only)
+  =========================================================
+  Aggressively tuned for the lowest possible round-trip latency on a
+  single host (Mac/Linux). Use only with all DDS participants on the
+  same machine.
+
+  Key tunings vs cyclonedds-local.xml:
+    - SynchronousDeliveryPriorityThreshold=0
+        Bypass the async receive queue: deliver samples inline in the
+        receive thread. Cuts ~tens of microseconds per sample at the
+        cost of larger receive-thread duty cycle.
+    - HeartbeatInterval=2ms (was 10ms)
+        Reliable writers ack faster on loopback.
+    - WriterLingerDuration=0ms / NackDelay=0ms
+        No batching, no nack debounce.
+    - Socket buffers raised to 4MB to absorb LLM response bursts.
+    - Watermarks/WhcHigh raised so writers don't backpressure.
+    - Multicast disabled (loopback unicast only).
+    - LeaseDuration short for fast failure detection.
+-->
+<CycloneDDS xmlns="https://cdds.io/config"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="https://cdds.io/config https://raw.githubusercontent.com/eclipse-cyclonedds/cyclonedds/master/etc/cyclonedds.xsd">
+
+    <Domain id="any">
+        <General>
+            <Interfaces>
+                <NetworkInterface address="127.0.0.1" />
+            </Interfaces>
+            <AllowMulticast>false</AllowMulticast>
+            <MaxMessageSize>65500B</MaxMessageSize>
+        </General>
+
+        <Discovery>
+            <MaxAutoParticipantIndex>120</MaxAutoParticipantIndex>
+            <SPDPInterval>100ms</SPDPInterval>
+            <LeaseDuration>3s</LeaseDuration>
+        </Discovery>
+
+        <Internal>
+            <!-- Inline delivery in receive thread = lower latency -->
+            <SynchronousDeliveryPriorityThreshold>0</SynchronousDeliveryPriorityThreshold>
+            <SynchronousDeliveryLatencyBound>inf</SynchronousDeliveryLatencyBound>
+
+            <!-- Aggressive heartbeat / no debounce -->
+            <HeartbeatInterval>2ms</HeartbeatInterval>
+            <WriterLingerDuration>0ms</WriterLingerDuration>
+            <NackDelay>0ms</NackDelay>
+
+            <!-- Large socket buffers absorb burst writes -->
+            <SocketReceiveBufferSize min="4MB"/>
+            <SocketSendBufferSize min="4MB"/>
+
+            <!-- Writer history cache -->
+            <Watermarks>
+                <WhcHigh>1MB</WhcHigh>
+            </Watermarks>
+        </Internal>
+
+        <Tracing>
+            <Verbosity>none</Verbosity>
+        </Tracing>
+    </Domain>
+</CycloneDDS>

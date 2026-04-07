@@ -4,10 +4,10 @@
 
 #include <condition_variable>
 #include <functional>
-#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 
 namespace llama_dds {
 
@@ -122,7 +122,7 @@ class DDSBridge {
 
     mutable std::mutex                           mutex_;
     std::condition_variable                      cv_pending_;  // notified by handle_request() on every enqueue
-    std::map<std::string, ChatCompletionRequest> pending_requests_;
+    std::unordered_map<std::string, ChatCompletionRequest> pending_requests_;
 
     // pimpl_ MUST be declared LAST: its destructor joins threads that
     // access mutex_, cv_pending_, and pending_requests_ above.
