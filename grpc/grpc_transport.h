@@ -93,17 +93,17 @@ class GRPCTransport {
     /// @}
 
     /// Returns true while the server/client is active.
-    bool is_running() const { return running_.load(); }
+    /// Delegates to impl's atomic flag (single source of truth).
+    bool is_running() const;
 
     const std::string & get_address() const { return address_; }
 
   private:
-    std::string                       address_;
+    std::string                        address_;
     std::unique_ptr<GRPCTransportImpl> pimpl_;
-    std::atomic<bool>                 running_{ false };
-    std::atomic<bool>                 is_server_{ false };
+    std::atomic<bool>                  is_server_{ false };
 
-    RequestCallback  request_callback_;
+    // Callbacks stored for subscribe_*() API; forwarded to impl on start.
     ResponseCallback response_callback_;
     StatusCallback   status_callback_;
 };

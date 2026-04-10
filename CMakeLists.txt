@@ -213,15 +213,15 @@ if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_EXAMPLES)
 endif()
 
 if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TOOLS)
+    if (LLAMA_DDS)
+        add_subdirectory(dds)
+    endif()
+
+    if (LLAMA_GRPC)
+        add_subdirectory(grpc)
+    endif()
+
     add_subdirectory(tools)
-endif()
-
-if (LLAMA_DDS)
-    add_subdirectory(dds)
-endif()
-
-if (LLAMA_GRPC)
-    add_subdirectory(grpc)
 endif()
 
 # Automatically add all files from the 'licenses' directory

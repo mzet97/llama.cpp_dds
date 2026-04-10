@@ -97,7 +97,7 @@ set(GRPC_SOURCES
     ${GRPC_SRCS}
 )
 
-add_library(llama-grpc OBJECT ${GRPC_SOURCES})
+add_library(llama-grpc STATIC ${GRPC_SOURCES})
 
 target_include_directories(llama-grpc PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}

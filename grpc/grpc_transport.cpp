@@ -6,6 +6,7 @@
 
 #include <grpcpp/grpcpp.h>
 
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <map>
@@ -269,12 +270,12 @@ class GRPCTransportImpl {
         // Join all inflight request threads
         {
             std::lock_guard<std::mutex> lk(inflight_mutex_);
-            for (auto & t : inflight_threads_) {
-                if (t.joinable()) {
-                    t.join();
+            for (auto & entry : inflight_entries_) {
+                if (entry.thread.joinable()) {
+                    entry.thread.join();
                 }
             }
-            inflight_threads_.clear();
+            inflight_entries_.clear();
         }
 
         fprintf(stderr, "[gRPC] Transport stopped\n");
@@ -329,19 +330,25 @@ class GRPCTransportImpl {
         auto response_callback = response_callback_;
         auto request_id        = request.request_id;
 
-        // Track thread for clean shutdown (was .detach() — caused use-after-free)
+        // Track thread for clean shutdown. Each thread marks its shared
+        // flag on completion so we can join+erase finished threads eagerly,
+        // preventing unbounded growth of the vector.
         {
             std::lock_guard<std::mutex> lk(inflight_mutex_);
-            // Clean up finished threads first
-            inflight_threads_.erase(
-                std::remove_if(inflight_threads_.begin(), inflight_threads_.end(),
-                    [](std::thread & t) {
-                        if (t.joinable()) { return false; }
-                        return true;
-                    }),
-                inflight_threads_.end());
+            // Eagerly join and remove threads that have finished executing.
+            for (auto it = inflight_entries_.begin(); it != inflight_entries_.end(); ) {
+                if (it->done->load(std::memory_order_acquire)) {
+                    if (it->thread.joinable()) it->thread.join();
+                    it = inflight_entries_.erase(it);
+                } else {
+                    ++it;
+                }
+            }
 
-            inflight_threads_.emplace_back([stub_ptr, proto_req, response_callback, request_id]() {
+            auto done_flag = std::make_shared<std::atomic<bool>>(false);
+            inflight_entries_.push_back({std::thread(), done_flag});
+            auto & entry = inflight_entries_.back();
+            entry.thread = std::thread([stub_ptr, proto_req, response_callback, request_id, done_flag]() {
                 grpc::ClientContext context;
                 context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(120));
                 auto reader = stub_ptr->StreamChat(&context, proto_req);
@@ -362,11 +369,14 @@ class GRPCTransportImpl {
                     fprintf(stderr, "[gRPC Client] StreamChat failed for %s: %s\n",
                             request_id.c_str(), status.error_message().c_str());
                 }
+                done_flag->store(true, std::memory_order_release);
             });
         }
 
         fprintf(stderr, "[gRPC Client] Request sent: id=%s\n", request.request_id.c_str());
     }
+
+    bool is_running() const { return running_.load(std::memory_order_acquire); }
 
   private:
     std::string       address_;
@@ -382,8 +392,14 @@ class GRPCTransportImpl {
     GRPCTransport::StatusCallback                    status_callback_;
     std::thread                                      client_thread_;
 
-    // Track inflight request threads for clean shutdown
-    std::vector<std::thread>                         inflight_threads_;
+    // Track inflight request threads for clean shutdown.
+    // Each entry has a done flag set by the thread on completion,
+    // allowing eager join+erase to prevent unbounded vector growth.
+    struct InflightEntry {
+        std::thread                      thread;
+        std::shared_ptr<std::atomic<bool>> done;
+    };
+    std::vector<InflightEntry>                       inflight_entries_;
     std::mutex                                       inflight_mutex_;
 };
 
@@ -398,14 +414,11 @@ GRPCTransport::GRPCTransport(const std::string & address) :
 GRPCTransport::~GRPCTransport() = default;
 
 bool GRPCTransport::start_server(RequestCallback on_request) {
-    request_callback_ = std::move(on_request);
-    is_server_        = true;
-    running_          = true;
-    return pimpl_->start_server(request_callback_);
+    is_server_ = true;
+    return pimpl_->start_server(std::move(on_request));
 }
 
 void GRPCTransport::stop_server() {
-    running_ = false;
     pimpl_->stop();
 }
 
@@ -423,13 +436,15 @@ bool GRPCTransport::start_client() {
         return false;
     }
     is_server_ = false;
-    running_   = true;
     return pimpl_->start_client(response_callback_, status_callback_);
 }
 
 void GRPCTransport::stop_client() {
-    running_ = false;
     pimpl_->stop();
+}
+
+bool GRPCTransport::is_running() const {
+    return pimpl_ ? pimpl_->is_running() : false;
 }
 
 void GRPCTransport::send_request(const llama_dds::ChatCompletionRequest & request) {

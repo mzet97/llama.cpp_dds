@@ -248,8 +248,8 @@ inline llama_ChatCompletionRequest to_llama_request(const ChatCompletionRequest 
         result.n._release = false;
     }
 
-    // stop
-    if (req.stop) {
+    // stop (guard against empty vector → malloc(0) which is implementation-defined)
+    if (req.stop && !req.stop->empty()) {
         result.stop._maximum = req.stop->size();
         result.stop._length  = req.stop->size();
         result.stop._buffer  = (char **) malloc(sizeof(char *) * req.stop->size());

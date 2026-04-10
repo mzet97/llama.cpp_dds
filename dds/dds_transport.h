@@ -93,17 +93,17 @@ class DDSTransport {
     /// @}
 
     /// Returns true while the reader thread is active.
-    bool is_running() const { return running_.load(); }
+    /// Delegates to the impl's atomic flag (single source of truth).
+    bool is_running() const;
 
     int get_domain_id() const { return domain_id_; }
 
   private:
     int                               domain_id_;
     std::unique_ptr<DDSTransportImpl> pimpl_;
-    std::atomic<bool>                 running_{ false };
     std::atomic<bool>                 is_server_{ false };
 
-    RequestCallback  request_callback_;
+    // Callbacks stored here for subscribe_*() API; forwarded to impl on start.
     ResponseCallback response_callback_;
     StatusCallback   status_callback_;
 };

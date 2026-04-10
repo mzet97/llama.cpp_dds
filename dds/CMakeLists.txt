@@ -15,9 +15,8 @@ endif()
 
 # Find CycloneDDS (system paths + any prefixes added above)
 find_package(CycloneDDS QUIET)
-find_package(CycloneDDS-CXX QUIET)
 
-if (NOT CycloneDDS_FOUND OR NOT CycloneDDS-CXX_FOUND)
+if (NOT CycloneDDS_FOUND)
     message(STATUS "CycloneDDS not found, DDS support will be disabled")
     return()
 endif()
@@ -37,7 +36,7 @@ set(DDS_SOURCES
     ${IDL_SOURCES}
 )
 
-add_library(llama-dds OBJECT ${DDS_SOURCES})
+add_library(llama-dds STATIC ${DDS_SOURCES})
 
 target_compile_features(llama-dds PUBLIC cxx_std_17)
 

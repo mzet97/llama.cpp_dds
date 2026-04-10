@@ -28,7 +28,10 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <exception>
+#include <mutex>
+#include <queue>
 #include <thread>  // for std::thread::hardware_concurrency
 #include <vector>
 
@@ -363,30 +366,57 @@ static void transport_poll_loop(BridgeT *                       bridge,
 ) {
     LOG_INF("%s Polling thread started\n", tag);
 
-    // Track in-flight worker count so we can drain at shutdown.
-    std::atomic<int> in_flight{ 0 };
+    // Create a bounded thread pool to avoid thread explosion under high load
+    const int num_workers = std::max(4, (int)std::thread::hardware_concurrency());
+    std::vector<std::thread> workers;
+    
+    std::mutex queue_mutex;
+    std::condition_variable queue_cv;
+    std::queue<llama_dds::ChatCompletionRequest> req_queue;
+
+    for (int i = 0; i < num_workers; ++i) {
+        workers.emplace_back([&, tag]() {
+            while (running->load()) {
+                llama_dds::ChatCompletionRequest r;
+                {
+                    std::unique_lock<std::mutex> lock(queue_mutex);
+                    queue_cv.wait(lock, [&]() -> bool {
+                        return !req_queue.empty() || !running->load();
+                    });
+                    
+                    if (!running->load() && req_queue.empty()) {
+                        break;
+                    }
+                    
+                    r = std::move(req_queue.front());
+                    req_queue.pop();
+                }
+                
+                process_transport_request(bridge, r, queue_tasks, queue_results, vocab, model_name, meta,
+                                          params_base, tag);
+            }
+        });
+    }
 
     while (running->load()) {
         bridge->wait_for_request(std::chrono::milliseconds(5000));
 
         llama_dds::ChatCompletionRequest req;
         while (bridge->pop_pending_request(req)) {
-            in_flight.fetch_add(1);
-            std::thread(
-                [bridge, queue_tasks, queue_results, vocab, &model_name, meta, params_base,
-                 &in_flight, tag](llama_dds::ChatCompletionRequest r) {
-                    process_transport_request(bridge, r, queue_tasks, queue_results, vocab, model_name, meta,
-                                              params_base, tag);
-                    in_flight.fetch_sub(1);
-                },
-                std::move(req))
-                .detach();
+            {
+                std::lock_guard<std::mutex> lock(queue_mutex);
+                req_queue.push(std::move(req));
+            }
+            queue_cv.notify_one();
         }
     }
 
-    // Wait for in-flight requests to complete before exiting.
-    while (in_flight.load() > 0) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    // Wake up all workers to exit
+    queue_cv.notify_all();
+    for (auto& worker : workers) {
+        if (worker.joinable()) {
+            worker.join();
+        }
     }
 
     LOG_INF("%s Polling thread stopped\n", tag);

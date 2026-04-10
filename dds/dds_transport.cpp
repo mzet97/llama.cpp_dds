@@ -19,11 +19,6 @@ static const char * TOPIC_REQUEST  = "llama_chat_completion_request";
 static const char * TOPIC_RESPONSE = "llama_chat_completion_response";
 static const char * TOPIC_STATUS   = "llama_server_status";
 
-// generate_request_id wraps the shared UUID generator from dds_utils.h.
-static std::string generate_request_id() {
-    return llama_dds::generate_uuid();
-}
-
 namespace llama_dds {
 
 class DDSTransportImpl {
@@ -48,6 +43,7 @@ class DDSTransportImpl {
                 dds_create_topic(participant_, &llama_ChatCompletionRequest_desc, TOPIC_REQUEST, nullptr, nullptr);
             if (request_topic_ < 0) {
                 fprintf(stderr, "[DDS] Failed to create request topic: %d\n", request_topic_);
+                dds_delete(participant_); participant_ = 0;
                 return false;
             }
 
@@ -55,12 +51,14 @@ class DDSTransportImpl {
                 dds_create_topic(participant_, &llama_ChatCompletionResponse_desc, TOPIC_RESPONSE, nullptr, nullptr);
             if (response_topic_ < 0) {
                 fprintf(stderr, "[DDS] Failed to create response topic: %d\n", response_topic_);
+                dds_delete(participant_); participant_ = 0;
                 return false;
             }
 
             status_topic_ = dds_create_topic(participant_, &llama_ServerStatus_desc, TOPIC_STATUS, nullptr, nullptr);
             if (status_topic_ < 0) {
                 fprintf(stderr, "[DDS] Failed to create status topic: %d\n", status_topic_);
+                dds_delete(participant_); participant_ = 0;
                 return false;
             }
 
@@ -76,6 +74,7 @@ class DDSTransportImpl {
             if (request_reader_ < 0) {
                 fprintf(stderr, "[DDS] Failed to create request reader: %d\n", request_reader_);
                 dds_delete_qos(qos);
+                dds_delete(participant_); participant_ = 0;
                 return false;
             }
 
@@ -84,6 +83,7 @@ class DDSTransportImpl {
             if (response_writer_ < 0) {
                 fprintf(stderr, "[DDS] Failed to create response writer: %d\n", response_writer_);
                 dds_delete_qos(qos);
+                dds_delete(participant_); participant_ = 0;
                 return false;
             }
 
@@ -276,6 +276,8 @@ class DDSTransportImpl {
         }
     }
 
+    bool is_running_impl() const { return running_.load(std::memory_order_acquire); }
+
   private:
     void client_response_loop() {
         fprintf(stderr, "[DDS Client] Response reader loop started\n");
@@ -320,8 +322,10 @@ class DDSTransportImpl {
                     } catch (const std::exception & e) {
                         fprintf(stderr, "[DDS Client] response callback error: %s\n", e.what());
                     }
+                    dds_sample_free(samples[0], &llama_ChatCompletionResponse_desc, DDS_FREE_ALL);
+                } else if (samples[0]) {
+                    dds_sample_free(samples[0], &llama_ChatCompletionResponse_desc, DDS_FREE_ALL);
                 }
-                dds_return_loan(response_reader_, samples, n);
             }
 
             // Drain all available status samples
@@ -338,8 +342,10 @@ class DDSTransportImpl {
                         } catch (const std::exception & e) {
                             fprintf(stderr, "[DDS Client] status callback error: %s\n", e.what());
                         }
+                        dds_sample_free(samples[0], &llama_ServerStatus_desc, DDS_FREE_ALL);
+                    } else if (samples[0]) {
+                        dds_sample_free(samples[0], &llama_ServerStatus_desc, DDS_FREE_ALL);
                     }
-                    dds_return_loan(status_reader_, samples, n);
                 }
             }
         }
@@ -399,9 +405,10 @@ class DDSTransportImpl {
                             } catch (const std::exception & e) {
                                 fprintf(stderr, "[DDS] Error processing request: %s\n", e.what());
                             }
+                            dds_sample_free(samples[0], &llama_ChatCompletionRequest_desc, DDS_FREE_ALL);
+                        } else if (samples[0]) {
+                            dds_sample_free(samples[0], &llama_ChatCompletionRequest_desc, DDS_FREE_ALL);
                         }
-
-                        dds_return_loan(request_reader_, samples, n);
                     } else {
                         if (n < 0) {
                             fprintf(stderr, "[DDS] Error reading: %d\n", n);
@@ -450,14 +457,11 @@ DDSTransport::DDSTransport(int domain_id) :
 DDSTransport::~DDSTransport() = default;
 
 bool DDSTransport::start_server(llama_dds::DDSTransport::RequestCallback on_request) {
-    request_callback_ = std::move(on_request);
-    is_server_        = true;
-    running_          = true;
-    return pimpl_->start_server(request_callback_);
+    is_server_ = true;
+    return pimpl_->start_server(std::move(on_request));
 }
 
 void DDSTransport::stop_server() {
-    running_ = false;
     pimpl_->stop();
 }
 
@@ -475,13 +479,15 @@ bool DDSTransport::start_client() {
         return false;
     }
     is_server_ = false;
-    running_   = true;
     return pimpl_->start_client(response_callback_, status_callback_);
 }
 
 void DDSTransport::stop_client() {
-    running_ = false;
     pimpl_->stop();
+}
+
+bool DDSTransport::is_running() const {
+    return pimpl_ ? pimpl_->is_running_impl() : false;
 }
 
 void DDSTransport::send_request(const llama_dds::ChatCompletionRequest & request) {
