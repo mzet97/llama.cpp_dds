@@ -237,6 +237,7 @@ class DDSTransportImpl {
 
             if (request_writer_ < 0 || response_reader_ < 0 || status_reader_ < 0) {
                 fprintf(stderr, "[DDS Client] Failed to create reader/writer entities\n");
+                dds_delete(participant_); participant_ = 0;
                 return false;
             }
 
