@@ -35,8 +35,12 @@
 #include <thread>  // for std::thread::hardware_concurrency
 #include <vector>
 
+#include <cstdlib>  // std::_Exit (async-signal-safe)
+
 #if defined(_WIN32)
 #    include <windows.h>
+#else
+#    include <unistd.h>
 #endif
 
 static std::function<void(int)> shutdown_handler;
@@ -293,8 +297,19 @@ static void process_transport_request(BridgeT *                                b
                                 completion_tokens);
                     }
                 } else {
-                    // Non-streaming: accumulate
-                    generated_text += cmpl_partial->content;
+                    // Non-streaming: accumulate under a safety cap so a
+                    // misbehaving model can't grow `generated_text`
+                    // indefinitely (UTF-8-safe truncate is not needed here;
+                    // we just stop appending).
+                    static constexpr size_t MAX_GENERATED_BYTES = 4 * 1024 * 1024;  // 4 MB
+                    if (generated_text.size() < MAX_GENERATED_BYTES) {
+                        generated_text += cmpl_partial->content;
+                    } else if (!is_final) {
+                        LOG_WRN("%s generated_text exceeded %zu bytes — truncating\n",
+                                tag, MAX_GENERATED_BYTES);
+                        finish_reason = "length";
+                        is_final      = true;
+                    }
                     LOG_INF("%s Got partial: %zu chars total (n_decoded=%d)\n", tag, generated_text.size(),
                             completion_tokens);
 
@@ -425,10 +440,11 @@ static void transport_poll_loop(BridgeT *                       bridge,
 
 static inline void signal_handler(int signal) {
     if (is_terminating.test_and_set()) {
-        // in case it hangs, we can force terminate the server by hitting Ctrl+C twice
-        // this is for better developer experience, we can remove when the server is stable enough
+        // In case the graceful path hangs, a second Ctrl+C force-terminates.
+        // exit() is not async-signal-safe (runs atexit handlers, may allocate);
+        // _exit() is the correct primitive in a signal context.
         fprintf(stderr, "Received second interrupt, terminating immediately.\n");
-        exit(1);
+        std::_Exit(1);
     }
 
     shutdown_handler(signal);
@@ -819,6 +835,31 @@ int main(int argc, char ** argv) {
         if (ctx_http.thread.joinable()) {
             ctx_http.thread.join();  // keep the main thread alive
         }
+
+        // Mirror the non-router shutdown: stop transport threads BEFORE
+        // destroying their bridges in clean_up(). Without this, dds/grpc
+        // poll threads can still execute while their DDSBridge/GRPCBridge
+        // unique_ptrs are destroyed, causing use-after-free.
+#if defined(LLAMA_DDS)
+        if (dds_bridge) {
+            dds_running = false;
+            if (dds_poll_thread.joinable()) {
+                dds_poll_thread.join();
+            }
+            dds_bridge->stop();
+            LOG_INF("%s: DDS polling thread stopped (router)\n", __func__);
+        }
+#endif
+#if defined(LLAMA_GRPC)
+        if (grpc_bridge) {
+            grpc_running = false;
+            if (grpc_poll_thread.joinable()) {
+                grpc_poll_thread.join();
+            }
+            grpc_bridge->stop();
+            LOG_INF("%s: gRPC polling thread stopped (router)\n", __func__);
+        }
+#endif
 
         // when the HTTP server stops, clean up and exit
         clean_up();

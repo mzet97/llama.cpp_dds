@@ -3,6 +3,7 @@
 #include "dds_transport.h"
 
 #include <condition_variable>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -122,6 +123,10 @@ class DDSBridge {
 
     mutable std::mutex                           mutex_;
     std::condition_variable                      cv_pending_;  // notified by handle_request() on every enqueue
+    // FIFO ordering: unordered_map alone gave hash-arbitrary pop order, so
+    // old requests could starve under load. The deque preserves arrival
+    // order; the map provides O(1) dedup by request_id and fast cancel.
+    std::deque<std::string>                                pending_order_;
     std::unordered_map<std::string, ChatCompletionRequest> pending_requests_;
 
     // pimpl_ MUST be declared LAST: its destructor joins threads that

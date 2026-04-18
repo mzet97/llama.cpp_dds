@@ -201,10 +201,17 @@ void DDSBridge::handle_request(const ChatCompletionRequest & request) {
     // where a fast pop+complete could decrement before increment.
     pimpl_->inc_pending();
 
-    // Store request for tracking
+    // Store request for tracking (FIFO via pending_order_, lookup via map).
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        pending_requests_[request.request_id] = request;
+        auto [it, inserted] = pending_requests_.emplace(request.request_id, request);
+        if (inserted) {
+            pending_order_.push_back(request.request_id);
+        } else {
+            // Duplicate request_id (re-delivery from TRANSIENT_LOCAL);
+            // keep newest payload but don't re-queue.
+            it->second = request;
+        }
     }
 
     fprintf(stderr, "[DDSBridge] request queued: model=%s, request_id=%s\n", request.model.c_str(),
@@ -215,13 +222,18 @@ void DDSBridge::handle_request(const ChatCompletionRequest & request) {
 
 bool DDSBridge::pop_pending_request(ChatCompletionRequest & out_request) {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (pending_requests_.empty()) {
-        return false;
+    while (!pending_order_.empty()) {
+        auto id = std::move(pending_order_.front());
+        pending_order_.pop_front();
+        auto it = pending_requests_.find(id);
+        if (it == pending_requests_.end()) {
+            continue;  // stale id (e.g., cancelled) — try next
+        }
+        out_request = std::move(it->second);
+        pending_requests_.erase(it);
+        return true;
     }
-    auto it     = pending_requests_.begin();
-    out_request = it->second;
-    pending_requests_.erase(it);
-    return true;
+    return false;
 }
 
 bool DDSBridge::has_pending_requests() const {
@@ -231,7 +243,7 @@ bool DDSBridge::has_pending_requests() const {
 
 bool DDSBridge::wait_for_request(std::chrono::milliseconds timeout) {
     std::unique_lock<std::mutex> lk(mutex_);
-    cv_pending_.wait_for(lk, timeout, [this] { return !pending_requests_.empty() || !running_.load(); });
+    cv_pending_.wait_for(lk, timeout, [this] { return !pending_order_.empty() || !running_.load(); });
     return true;  // caller re-checks has_pending_requests()
 }
 

@@ -266,13 +266,25 @@ void server_response::remove_waiting_task_ids(const std::unordered_set<int> & id
 server_task_result_ptr server_response::recv(const std::unordered_set<int> & id_tasks) {
     while (true) {
         std::unique_lock<std::mutex> lock(mutex_results);
+        // Wake on either shutdown or any matching/new result. Callers are
+        // responsible for handling a nullptr return as "terminated" — same
+        // contract as recv_with_timeout on timeout.
         condition_results.wait(lock, [&]{
             if (!running) {
-                RES_DBG("%s : queue result stop\n", "recv");
-                std::terminate(); // we cannot return here since the caller is HTTP code
+                return true;
             }
-            return !queue_results.empty();
+            for (const auto & r : queue_results) {
+                if (id_tasks.find(r->id) != id_tasks.end()) {
+                    return true;
+                }
+            }
+            return false;
         });
+
+        if (!running) {
+            RES_DBG("%s : queue result stop (graceful)\n", "recv");
+            return nullptr;
+        }
 
         for (size_t i = 0; i < queue_results.size(); i++) {
             if (id_tasks.find(queue_results[i]->id) != id_tasks.end()) {
@@ -282,8 +294,6 @@ server_task_result_ptr server_response::recv(const std::unordered_set<int> & id_
             }
         }
     }
-
-    // should never reach here
 }
 
 server_task_result_ptr server_response::recv_with_timeout(const std::unordered_set<int> & id_tasks, int timeout) {
@@ -300,15 +310,13 @@ server_task_result_ptr server_response::recv_with_timeout(const std::unordered_s
 
         std::cv_status cr_res = condition_results.wait_for(lock, std::chrono::seconds(timeout));
         if (!running) {
-            RES_DBG("%s : queue result stop\n", __func__);
-            std::terminate(); // we cannot return here since the caller is HTTP code
+            RES_DBG("%s : queue result stop (graceful)\n", __func__);
+            return nullptr; // callers treat nullptr as terminated (same contract as timeout)
         }
         if (cr_res == std::cv_status::timeout) {
             return nullptr;
         }
     }
-
-    // should never reach here
 }
 
 server_task_result_ptr server_response::recv(int id_task) {

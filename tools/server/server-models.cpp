@@ -506,7 +506,11 @@ void server_models::load(const std::string & name) {
         FILE * stdin_file = subprocess_stdin(child_proc.get());
         FILE * stdout_file = subprocess_stdout(child_proc.get()); // combined stdout/stderr
 
-        std::thread log_thread([&]() {
+        // Capture explicitly by value where safe (name, port, FILE*) and by
+        // pointer for `this`. Using [&] on this inner thread risked dangling
+        // references to stdin_file/stdout_file (stack locals of the outer
+        // lambda) if the outer lambda exited while this thread was running.
+        std::thread log_thread([this, name, port, stdout_file]() {
             // read stdout/stderr and forward to main server log
             // also handle status report from child process
             bool state_received = false; // true if child state received
@@ -525,8 +529,12 @@ void server_models::load(const std::string & name) {
             }
         });
 
-        std::thread stopping_thread([&]() {
-            // thread to monitor stopping signal
+        std::thread stopping_thread([this, name, stdin_file, stop_timeout, child_proc]() {
+            // thread to monitor stopping signal. Explicit captures: name,
+            // stdin_file, stop_timeout, child_proc (shared_ptr keeps the
+            // subprocess handle alive). Previous [&] risked dangling refs
+            // into the outer lambda's stack when the thread survived past
+            // the parent scope during shutdown races.
             auto is_stopping = [this, &name]() {
                 return this->stopping_models.find(name) != this->stopping_models.end();
             };
@@ -738,8 +746,11 @@ std::thread server_models::setup_child_server(const std::function<void(int)> & s
             }
         }
         if (eof) {
-            SRV_INF("%s", "EOF on stdin detected, forcing shutdown...\n");
-            exit(1);
+            // Route through shutdown_handler so DDS/gRPC bridges are joined
+            // and the HTTP runner is stopped cleanly. exit(1) here would
+            // leave shared-memory segments and gRPC server state dangling.
+            SRV_INF("%s", "EOF on stdin detected, triggering graceful shutdown...\n");
+            shutdown_handler(0);
         }
     });
 }

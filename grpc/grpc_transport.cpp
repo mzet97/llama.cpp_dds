@@ -111,12 +111,27 @@ class LlamaServiceImpl final : public llama_grpc::LlamaService::Service {
             on_request_(cpp_req);
         }
 
-        // Block until done, with timeout. The writer is used by send_response() from another thread.
+        // Block until done OR the client cancels the RPC. Previously we
+        // slept up to 120s even after the client disconnected, which kept
+        // server slots pinned until the timeout. Poll IsCancelled() on
+        // 1-second wakes so we release slots promptly.
         {
             std::unique_lock<std::mutex> lk(state->mtx);
-            bool ok = state->cv.wait_for(lk, std::chrono::seconds(120),
-                                          [&] { return state->done; });
-            if (!ok) {
+            using namespace std::chrono;
+            auto deadline = steady_clock::now() + seconds(120);
+            bool completed = false;
+            while (!state->done) {
+                if (steady_clock::now() >= deadline) break;
+                state->cv.wait_for(lk, seconds(1), [&] { return state->done; });
+                if (state->done) { completed = true; break; }
+                if (context->IsCancelled()) {
+                    fprintf(stderr, "[gRPC] Client cancelled StreamChat: %s\n",
+                            cpp_req.request_id.c_str());
+                    state->done = true;
+                    break;
+                }
+            }
+            if (!completed && !context->IsCancelled()) {
                 fprintf(stderr, "[gRPC] StreamChat timeout (120s) for request: %s\n",
                         cpp_req.request_id.c_str());
                 std::lock_guard<std::mutex> slk(streams_mutex_);
@@ -167,8 +182,15 @@ class LlamaServiceImpl final : public llama_grpc::LlamaService::Service {
             std::lock_guard<std::mutex> lk(state->mtx);
 
             if (state->writer) {
-                // Streaming RPC: write chunk to the ServerWriter
-                state->writer->Write(proto);
+                // Streaming RPC: write chunk to the ServerWriter. If the
+                // client has gone away, Write() returns false — surface
+                // that as "done" so StreamChat can return promptly.
+                if (!state->writer->Write(proto)) {
+                    fprintf(stderr, "[gRPC] Write() failed (client gone?) for %s\n",
+                            resp.request_id.c_str());
+                    state->done   = true;
+                    should_notify = true;
+                }
             }
 
             if (resp.is_final) {
@@ -228,6 +250,12 @@ class GRPCTransportImpl {
             service_ = std::make_unique<LlamaServiceImpl>(std::move(on_request));
 
             grpc::ServerBuilder builder;
+            // SECURITY: plaintext listener — intended for trusted LAN only. TLS is
+            // the responsibility of the deployment (reverse proxy / service mesh).
+            fprintf(stderr,
+                    "[gRPC] WARNING: listening on %s with InsecureServerCredentials. "
+                    "Do not expose this port to untrusted networks.\n",
+                    address_.c_str());
             builder.AddListeningPort(address_, grpc::InsecureServerCredentials());
             builder.RegisterService(service_.get());
             // Set max message sizes for large prompts
