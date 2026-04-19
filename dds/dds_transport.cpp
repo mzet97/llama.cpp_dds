@@ -169,8 +169,9 @@ class DDSTransportImpl {
         if (ret != DDS_RETCODE_OK) {
             fprintf(stderr, "[DDS] Error sending response: %d\n", ret);
         }
-
+#ifdef DDS_DEBUG
         fprintf(stderr, "[DDS] Sent response for request: %s\n", response.request_id.c_str());
+#endif
     }
 
     void publish_status(const llama_dds::ServerStatus & status) {
@@ -272,9 +273,12 @@ class DDSTransportImpl {
         free_llama_request(data);
         if (ret != DDS_RETCODE_OK) {
             fprintf(stderr, "[DDS Client] Failed to send request: %d\n", ret);
-        } else {
+        }
+#ifdef DDS_DEBUG
+        else {
             fprintf(stderr, "[DDS Client] Request sent: id=%s\n", request.request_id.c_str());
         }
+#endif
     }
 
     bool is_running_impl() const { return running_.load(std::memory_order_acquire); }
@@ -396,10 +400,10 @@ class DDSTransportImpl {
                             auto * req = static_cast<llama_ChatCompletionRequest *>(samples[0]);
                             try {
                                 auto request = to_request(*req);
-
+#ifdef DDS_DEBUG
                                 fprintf(stderr, "[DDS] Received request: id=%s, model=%s\n", request.request_id.c_str(),
                                         request.model.c_str());
-
+#endif
                                 if (request_callback_) {
                                     request_callback_(request);
                                 }

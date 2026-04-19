@@ -99,9 +99,15 @@ class DDSBridgeImpl {
     void inc_pending() { pending_count_.fetch_add(1); }
 
     void dec_pending() {
-        int old = pending_count_.load();
-        while (old > 0 && !pending_count_.compare_exchange_weak(old, old - 1)) {
-            // CAS loop: retry if another thread modified pending_count_
+        int old = pending_count_.load(std::memory_order_relaxed);
+        while (old > 0) {
+            if (pending_count_.compare_exchange_weak(old, old - 1,
+                                                     std::memory_order_release,
+                                                     std::memory_order_relaxed)) {
+                return;
+            }
+            // Yield to avoid busy-spin when N threads contend (e.g. burst shutdown).
+            std::this_thread::yield();
         }
     }
 
