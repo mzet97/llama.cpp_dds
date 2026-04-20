@@ -140,6 +140,9 @@ public:
     // if timeout is reached, nullptr is returned
     server_task_result_ptr recv_with_timeout(const std::unordered_set<int> & id_tasks, int timeout);
 
+    // millisecond-granularity variant (avoids 1 s polling floor on DDS/gRPC hot path)
+    server_task_result_ptr recv_with_timeout_ms(const std::unordered_set<int> & id_tasks, int timeout_ms);
+
     // single-task version of recv()
     server_task_result_ptr recv(int id_task);
 

@@ -297,6 +297,10 @@ server_task_result_ptr server_response::recv(const std::unordered_set<int> & id_
 }
 
 server_task_result_ptr server_response::recv_with_timeout(const std::unordered_set<int> & id_tasks, int timeout) {
+    return recv_with_timeout_ms(id_tasks, timeout * 1000);
+}
+
+server_task_result_ptr server_response::recv_with_timeout_ms(const std::unordered_set<int> & id_tasks, int timeout_ms) {
     while (true) {
         std::unique_lock<std::mutex> lock(mutex_results);
 
@@ -308,7 +312,7 @@ server_task_result_ptr server_response::recv_with_timeout(const std::unordered_s
             }
         }
 
-        std::cv_status cr_res = condition_results.wait_for(lock, std::chrono::seconds(timeout));
+        std::cv_status cr_res = condition_results.wait_for(lock, std::chrono::milliseconds(timeout_ms));
         if (!running) {
             RES_DBG("%s : queue result stop (graceful)\n", __func__);
             return nullptr; // callers treat nullptr as terminated (same contract as timeout)

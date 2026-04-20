@@ -28,11 +28,8 @@
 
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <exception>
-#include <mutex>
-#include <queue>
-#include <thread>  // for std::thread::hardware_concurrency
+#include <thread>  // for std::thread + std::thread::hardware_concurrency
 #include <vector>
 
 #include <cstdlib>  // std::_Exit (async-signal-safe)
@@ -108,13 +105,15 @@ static void process_transport_request(BridgeT *                                b
                                       const common_params *                    params_base,
                                       const char *                             tag  // "[DDS]" or "[gRPC]"
 ) {
-    LOG_INF("%s Processing request: %s\n", tag, dds_req.request_id.c_str());
+    LOG_DBG("%s Processing request: %s\n", tag, dds_req.request_id.c_str());
 
     try {
     // Convert DDS request to JSON (ordered_json = server's `json` type for oaicompat calls)
     json data = dds_request_to_json(dds_req, model_name);
 
-    LOG_INF("%s Request JSON: %s\n", tag, data.dump(2).c_str());
+    // Pretty-print JSON is expensive; demoted to DBG so the dump is only
+    // materialised when --verbosity > INFO.
+    LOG_DBG("%s Request JSON: %s\n", tag, data.dump(2).c_str());
 
     // C4: Apply the model's actual chat template via the server pipeline.
     // Falls back to a hardcoded Phi template only when meta is unavailable
@@ -145,7 +144,7 @@ static void process_transport_request(BridgeT *                                b
         data["prompt"] = prompt;
     }
 
-    LOG_INF("%s Prompt: %s\n", tag, prompt.substr(0, 100).c_str());
+    LOG_DBG("%s Prompt: %s\n", tag, prompt.substr(0, 100).c_str());
 
     // M3: Use tokenize_input_prompts — same pipeline as the HTTP endpoint.
     // mctx=nullptr → text-only tokenization (DDS does not carry multimodal data).
@@ -169,7 +168,7 @@ static void process_transport_request(BridgeT *                                b
         bridge->send_response(resp);
         return;
     }
-    LOG_INF("%s Tokenized to %zu tokens\n", tag, tok_result.size());
+    LOG_DBG("%s Tokenized to %zu tokens\n", tag, tok_result.size());
 
     // Create a task
     server_task task(SERVER_TASK_TYPE_COMPLETION);
@@ -187,7 +186,7 @@ static void process_transport_request(BridgeT *                                b
         task.params.sampling.temp = dds_req.temperature > 0 ? dds_req.temperature : 0.7f;
     }
 
-    LOG_INF("%s Posting task to queue, id=%d, tokens=%zu\n", tag, task.id, task.tokens.size());
+    LOG_DBG("%s Posting task to queue, id=%d, tokens=%zu\n", tag, task.id, task.tokens.size());
 
     // C6: Capture task_id before std::move(task) consumes it
     const int task_id = task.id;
@@ -199,7 +198,7 @@ static void process_transport_request(BridgeT *                                b
     queue_tasks->post(std::move(task));
 
     // Wait for the result using the proper queue mechanism
-    LOG_INF("%s Waiting for result (stream=%d)...\n", tag, (int) dds_req.stream);
+    LOG_DBG("%s Waiting for result (stream=%d)...\n", tag, (int) dds_req.stream);
 
     std::string generated_text;
     int         prompt_tokens     = 0;
@@ -207,33 +206,37 @@ static void process_transport_request(BridgeT *                                b
     std::string finish_reason     = "stop";
 
     // Keep receiving results until we get a final one or timeout
-    auto      start_wait   = std::chrono::steady_clock::now();
+    auto      start_wait  = std::chrono::steady_clock::now();
     // M8: compute once — timeout derived from --dds-timeout param (default 60s)
     const int timeout_secs = (params_base != nullptr) ? params_base->dds_timeout_secs : 60;
+    const auto deadline    = start_wait + std::chrono::seconds(timeout_secs);
     bool      is_final     = false;
     int       result_count = 0;
 
     while (!is_final) {
         // Check timeout
-        auto now     = std::chrono::steady_clock::now();
-        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start_wait).count();
-        if (elapsed > timeout_secs) {
+        auto now = std::chrono::steady_clock::now();
+        if (now >= deadline) {
             LOG_WRN("%s Timeout (%ds) waiting for final result\n", tag, timeout_secs);
             break;
         }
 
-        // Wait for result with a short timeout (1s — minimum granularity of
-        // recv_with_timeout which takes int seconds)
-        auto result = queue_results->recv_with_timeout({ task_id }, 1);
+        // PERF FIX: ms-granularity wait replaces the old 1 s polling floor.
+        // Cap the single wait at 250 ms so a stuck task still exits within
+        // timeout_secs even if the inference thread dies silently, while keeping
+        // per-request jitter out of the hot path for healthy requests.
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
+        const int  wait_ms   = (int) std::min<std::chrono::milliseconds::rep>(remaining.count(), 250);
+        auto       result    = queue_results->recv_with_timeout_ms({ task_id }, wait_ms);
         result_count++;
 
         if (result == nullptr) {
-            // Timeout, continue waiting
-            LOG_INF("%s Timeout waiting (attempt %d)\n", tag, result_count);
+            // Timeout — just loop and re-check the deadline. No per-attempt log
+            // (this fires ~4× per second per in-flight request under load).
             continue;
         }
 
-        LOG_INF("%s Got result #%d\n", tag, result_count);
+        LOG_DBG("%s Got result #%d\n", tag, result_count);
 
         // Check if it's a final completion result
         auto * cmpl_final = dynamic_cast<server_task_result_cmpl_final *>(result.get());
@@ -271,7 +274,7 @@ static void process_transport_request(BridgeT *                                b
                 generated_text = cmpl_final->content;
             }
 
-            LOG_INF("%s Got FINAL completion: %d prompt tokens, %d completion tokens\n", tag, prompt_tokens,
+            LOG_DBG("%s Got FINAL completion: %d prompt tokens, %d completion tokens\n", tag, prompt_tokens,
                     completion_tokens);
             is_final = true;
 
@@ -293,7 +296,7 @@ static void process_transport_request(BridgeT *                                b
                         chunk.prompt_tokens     = prompt_tokens;
                         chunk.completion_tokens = completion_tokens;
                         bridge->send_response(chunk);
-                        LOG_INF("%s Streamed chunk: %zu chars (n_decoded=%d)\n", tag, cmpl_partial->content.size(),
+                        LOG_DBG("%s Streamed chunk: %zu chars (n_decoded=%d)\n", tag, cmpl_partial->content.size(),
                                 completion_tokens);
                     }
                 } else {
@@ -310,12 +313,12 @@ static void process_transport_request(BridgeT *                                b
                         finish_reason = "length";
                         is_final      = true;
                     }
-                    LOG_INF("%s Got partial: %zu chars total (n_decoded=%d)\n", tag, generated_text.size(),
+                    LOG_DBG("%s Got partial: %zu chars total (n_decoded=%d)\n", tag, generated_text.size(),
                             completion_tokens);
 
                     if (!cmpl_partial->is_progress && completion_tokens >= dds_req.max_tokens) {
                         finish_reason = "stop";
-                        LOG_INF("%s Received full completion (%d tokens)\n", tag, completion_tokens);
+                        LOG_DBG("%s Received full completion (%d tokens)\n", tag, completion_tokens);
                         is_final = true;
                     }
                 }
@@ -332,7 +335,7 @@ static void process_transport_request(BridgeT *                                b
         }
     }
 
-    LOG_INF("%s Sending final response\n", tag);
+    LOG_DBG("%s Sending final response\n", tag);
 
     // Send the terminal response — for streaming this carries is_final=true with empty content;
     // for non-streaming it carries the complete generated text.
@@ -350,7 +353,7 @@ static void process_transport_request(BridgeT *                                b
     // C6: Remove task_id from waiting list after completion/timeout
     queue_results->remove_waiting_task_id(task_id);
 
-    LOG_INF("%s Response sent for request: %s\n", tag, dds_req.request_id.c_str());
+    LOG_DBG("%s Response sent for request: %s\n", tag, dds_req.request_id.c_str());
     } catch (const std::exception & ex) {
         LOG_ERR("%s Unhandled exception processing request %s: %s\n", tag, dds_req.request_id.c_str(), ex.what());
         // Ensure pending count is decremented via a final error response
@@ -381,54 +384,34 @@ static void transport_poll_loop(BridgeT *                       bridge,
 ) {
     LOG_INF("%s Polling thread started\n", tag);
 
-    // Create a bounded thread pool to avoid thread explosion under high load
-    const int num_workers = std::max(4, (int)std::thread::hardware_concurrency());
+    // PERF FIX #3: size the pool by the real concurrency cap (--parallel / GPU slots),
+    // not by CPU cores. Over-provisioning workers only adds mutex contention because
+    // server_queue serialises inference onto n_parallel slots anyway.
+    // PERF FIX #4: workers pull directly from the DDSBridge FIFO — the previous
+    // double-queue (bridge → req_queue) added one mutex + one copy per request.
+    const int parallel_slots = (params_base != nullptr) ? std::max(1, params_base->n_parallel) : 4;
+    const int num_workers    = parallel_slots;
     std::vector<std::thread> workers;
-    
-    std::mutex queue_mutex;
-    std::condition_variable queue_cv;
-    std::queue<llama_dds::ChatCompletionRequest> req_queue;
+    workers.reserve(num_workers);
 
     for (int i = 0; i < num_workers; ++i) {
-        workers.emplace_back([&, tag]() {
+        workers.emplace_back([=]() {
             while (running->load()) {
-                llama_dds::ChatCompletionRequest r;
-                {
-                    std::unique_lock<std::mutex> lock(queue_mutex);
-                    queue_cv.wait(lock, [&]() -> bool {
-                        return !req_queue.empty() || !running->load();
-                    });
-                    
-                    if (!running->load() && req_queue.empty()) {
-                        break;
-                    }
-                    
-                    r = std::move(req_queue.front());
-                    req_queue.pop();
+                llama_dds::ChatCompletionRequest req;
+                if (!bridge->pop_pending_request(req)) {
+                    // No work — block on the bridge condvar until a request lands
+                    // or shutdown is signalled (5 s keeps the wake-up path snappy
+                    // for graceful shutdown).
+                    bridge->wait_for_request(std::chrono::milliseconds(5000));
+                    continue;
                 }
-                
-                process_transport_request(bridge, r, queue_tasks, queue_results, vocab, model_name, meta,
+                process_transport_request(bridge, req, queue_tasks, queue_results, vocab, model_name, meta,
                                           params_base, tag);
             }
         });
     }
 
-    while (running->load()) {
-        bridge->wait_for_request(std::chrono::milliseconds(5000));
-
-        llama_dds::ChatCompletionRequest req;
-        while (bridge->pop_pending_request(req)) {
-            {
-                std::lock_guard<std::mutex> lock(queue_mutex);
-                req_queue.push(std::move(req));
-            }
-            queue_cv.notify_one();
-        }
-    }
-
-    // Wake up all workers to exit
-    queue_cv.notify_all();
-    for (auto& worker : workers) {
+    for (auto & worker : workers) {
         if (worker.joinable()) {
             worker.join();
         }
