@@ -220,8 +220,10 @@ void DDSBridge::handle_request(const ChatCompletionRequest & request) {
         }
     }
 
+#ifdef DDS_DEBUG
     fprintf(stderr, "[DDSBridge] request queued: model=%s, request_id=%s\n", request.model.c_str(),
             request.request_id.c_str());
+#endif
 
     cv_pending_.notify_one();  // wake the server poll loop
 }
