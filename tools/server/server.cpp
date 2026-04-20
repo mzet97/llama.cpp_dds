@@ -384,17 +384,13 @@ static void transport_poll_loop(BridgeT *                       bridge,
 ) {
     LOG_INF("%s Polling thread started\n", tag);
 
-    // PERF FIX #3: workers pull directly from the DDSBridge FIFO — the previous
+    // PERF FIX #3: size the pool by the real concurrency cap (--parallel / GPU slots),
+    // not by CPU cores. Over-provisioning workers only adds mutex contention because
+    // server_queue serialises inference onto n_parallel slots anyway.
+    // PERF FIX #4: workers pull directly from the DDSBridge FIFO — the previous
     // double-queue (bridge → req_queue) added one mutex + one copy per request.
-    // PERF FIX #5: pool = 2× slots. With exactly n_parallel workers each worker
-    // blocks on its own recv_with_timeout_ms, so when a slot frees there is a
-    // ~20 ms stall until the same worker tokenises+posts its next request. Under
-    // 100 concurrent long-prompt requests that added ~1.8 s of idle GPU time
-    // versus HTTP (which lands all 100 tasks in queue_tasks up-front via the web
-    // server's own thread pool). Extra workers are mostly condvar-blocked, so
-    // the cost is thread memory; benefit is a continuously full task queue.
     const int parallel_slots = (params_base != nullptr) ? std::max(1, params_base->n_parallel) : 4;
-    const int num_workers    = parallel_slots * 2;
+    const int num_workers    = parallel_slots;
     std::vector<std::thread> workers;
     workers.reserve(num_workers);
 
