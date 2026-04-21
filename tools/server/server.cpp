@@ -107,13 +107,18 @@ static void process_transport_request(BridgeT *                                b
 ) {
     LOG_DBG("%s Processing request: %s\n", tag, dds_req.request_id.c_str());
 
+    // Hoisted so catch blocks below can reference it for waiting-list cleanup.
+    // Sentinel -1 means the task was never registered with queue_results.
+    int task_id = -1;
+
     try {
     // Convert DDS request to JSON (ordered_json = server's `json` type for oaicompat calls)
     json data = dds_request_to_json(dds_req, model_name);
 
-    // Pretty-print JSON is expensive; demoted to DBG so the dump is only
-    // materialised when --verbosity > INFO.
-    LOG_DBG("%s Request JSON: %s\n", tag, data.dump(2).c_str());
+    // LOG_DBG evaluates its args regardless of verbosity — dump(2) runs a
+    // pretty-print allocation on every request. Compact dump() is ~10x
+    // cheaper and still debuggable.
+    LOG_DBG("%s Request JSON: %s\n", tag, data.dump().c_str());
 
     // C4: Apply the model's actual chat template via the server pipeline.
     // Falls back to a hardcoded Phi template only when meta is unavailable
@@ -188,8 +193,9 @@ static void process_transport_request(BridgeT *                                b
 
     LOG_DBG("%s Posting task to queue, id=%d, tokens=%zu\n", tag, task.id, task.tokens.size());
 
-    // C6: Capture task_id before std::move(task) consumes it
-    const int task_id = task.id;
+    // C6: Capture task_id before std::move(task) consumes it.
+    // task_id was hoisted above the try so the catch blocks can reach it.
+    task_id = task.id;
 
     // Add task ID to waiting list before posting
     queue_results->add_waiting_task_id(task_id);
@@ -364,9 +370,18 @@ static void process_transport_request(BridgeT *                                b
         err_resp.is_final      = true;
         err_resp.finish_reason = "error";
         bridge->send_response(err_resp);
+        // Mirror the success-path cleanup: without this, every failed request
+        // leaks one entry in server_response::waiting_task_ids. Guard on
+        // task_id != -1 because the throw may have fired before registration.
+        if (task_id != -1) {
+            queue_results->remove_waiting_task_id(task_id);
+        }
     } catch (...) {
         LOG_ERR("%s Unknown exception processing request %s\n", tag, dds_req.request_id.c_str());
         bridge->cancel_pending_request();
+        if (task_id != -1) {
+            queue_results->remove_waiting_task_id(task_id);
+        }
     }
 }
 

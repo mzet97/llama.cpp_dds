@@ -318,6 +318,17 @@ server_task_result_ptr server_response::recv_with_timeout_ms(const std::unordere
             return nullptr; // callers treat nullptr as terminated (same contract as timeout)
         }
         if (cr_res == std::cv_status::timeout) {
+            // Race-window: a send() may have landed a result between the
+            // wait_for expiring and us re-acquiring the lock. Drain once
+            // more before giving up, otherwise the caller sees a spurious
+            // timeout for a task whose result is already in the queue.
+            for (int i = 0; i < (int) queue_results.size(); i++) {
+                if (id_tasks.find(queue_results[i]->id) != id_tasks.end()) {
+                    server_task_result_ptr res = std::move(queue_results[i]);
+                    queue_results.erase(queue_results.begin() + i);
+                    return res;
+                }
+            }
             return nullptr;
         }
     }
