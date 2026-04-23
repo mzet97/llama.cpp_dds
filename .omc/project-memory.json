@@ -1,0 +1,473 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1776717013704,
+  "projectRoot": "/Users/zeitune/Documents/tese/llama.cpp_dds",
+  "techStack": {
+    "languages": [
+      {
+        "name": "Python",
+        "version": ">=3.9",
+        "confidence": "high",
+        "markers": [
+          "pyproject.toml",
+          "requirements.txt"
+        ]
+      },
+      {
+        "name": "C/C++",
+        "version": null,
+        "confidence": "high",
+        "markers": [
+          "CMakeLists.txt",
+          "Makefile"
+        ]
+      }
+    ],
+    "frameworks": [],
+    "packageManager": "poetry",
+    "runtime": null
+  },
+  "build": {
+    "buildCommand": "make build",
+    "testCommand": "make test",
+    "lintCommand": "ruff check",
+    "devCommand": null,
+    "scripts": {}
+  },
+  "conventions": {
+    "namingStyle": null,
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": false,
+    "workspaces": [],
+    "mainDirectories": [
+      "docs",
+      "examples",
+      "scripts",
+      "src",
+      "tests"
+    ],
+    "gitBranches": {
+      "defaultBranch": "master",
+      "branchingStrategy": null
+    }
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "benches": {
+      "path": "benches",
+      "purpose": null,
+      "fileCount": 0,
+      "lastAccessed": 1776717013685,
+      "keyFiles": []
+    },
+    "build": {
+      "path": "build",
+      "purpose": "Build output",
+      "fileCount": 17,
+      "lastAccessed": 1776717013686,
+      "keyFiles": [
+        "CMakeCache 2.txt",
+        "CMakeCache 3.txt",
+        "CMakeCache.txt",
+        "CTestTestfile.cmake",
+        "DartConfiguration.tcl"
+      ]
+    },
+    "build-grpc": {
+      "path": "build-grpc",
+      "purpose": null,
+      "fileCount": 10,
+      "lastAccessed": 1776717013687,
+      "keyFiles": [
+        "CMakeCache.txt",
+        "CTestTestfile.cmake",
+        "DartConfiguration.tcl",
+        "Makefile",
+        "cmake_install.cmake"
+      ]
+    },
+    "build-grpc-gpu": {
+      "path": "build-grpc-gpu",
+      "purpose": null,
+      "fileCount": 10,
+      "lastAccessed": 1776717013687,
+      "keyFiles": [
+        "CMakeCache.txt",
+        "CTestTestfile.cmake",
+        "DartConfiguration.tcl",
+        "Makefile",
+        "cmake_install.cmake"
+      ]
+    },
+    "build-wsl": {
+      "path": "build-wsl",
+      "purpose": null,
+      "fileCount": 10,
+      "lastAccessed": 1776717013688,
+      "keyFiles": [
+        "CMakeCache.txt",
+        "CTestTestfile.cmake",
+        "DartConfiguration.tcl",
+        "Makefile",
+        "cmake_install.cmake"
+      ]
+    },
+    "ci": {
+      "path": "ci",
+      "purpose": null,
+      "fileCount": 3,
+      "lastAccessed": 1776717013688,
+      "keyFiles": [
+        "README-MUSA.md",
+        "README.md",
+        "run.sh"
+      ]
+    },
+    "cmake": {
+      "path": "cmake",
+      "purpose": null,
+      "fileCount": 11,
+      "lastAccessed": 1776717013689,
+      "keyFiles": [
+        "arm64-apple-clang.cmake",
+        "arm64-windows-llvm.cmake",
+        "build-info.cmake",
+        "common.cmake",
+        "download-models.cmake"
+      ]
+    },
+    "common": {
+      "path": "common",
+      "purpose": null,
+      "fileCount": 47,
+      "lastAccessed": 1776717013689,
+      "keyFiles": [
+        "CMakeLists.txt",
+        "arg.cpp",
+        "arg.h",
+        "base64.hpp",
+        "build-info.cpp.in"
+      ]
+    },
+    "dds": {
+      "path": "dds",
+      "purpose": null,
+      "fileCount": 55,
+      "lastAccessed": 1776717013690,
+      "keyFiles": [
+        "CLAUDE.md",
+        "CMakeLists.txt",
+        "LlamaDDS.o",
+        "README.md",
+        "benchmark_client.o"
+      ]
+    },
+    "docs": {
+      "path": "docs",
+      "purpose": "Documentation",
+      "fileCount": 15,
+      "lastAccessed": 1776717013690,
+      "keyFiles": [
+        "CLAUDE.md",
+        "DDS_QUALITY_REPORT.md",
+        "android.md",
+        "build-riscv64-spacemit.md",
+        "build-s390x.md"
+      ]
+    },
+    "examples": {
+      "path": "examples",
+      "purpose": "Example code",
+      "fileCount": 12,
+      "lastAccessed": 1776717013691,
+      "keyFiles": [
+        "CMakeLists.txt",
+        "convert_legacy_llama.py",
+        "json_schema_pydantic_example.py",
+        "json_schema_to_grammar.py",
+        "llama.vim"
+      ]
+    },
+    "ggml": {
+      "path": "ggml",
+      "purpose": null,
+      "fileCount": 2,
+      "lastAccessed": 1776717013691,
+      "keyFiles": [
+        "CMakeLists.txt"
+      ]
+    },
+    "gguf-py": {
+      "path": "gguf-py",
+      "purpose": null,
+      "fileCount": 3,
+      "lastAccessed": 1776717013692,
+      "keyFiles": [
+        "LICENSE",
+        "README.md",
+        "pyproject.toml"
+      ]
+    },
+    "grammars": {
+      "path": "grammars",
+      "purpose": null,
+      "fileCount": 9,
+      "lastAccessed": 1776717013692,
+      "keyFiles": [
+        "README.md",
+        "arithmetic.gbnf",
+        "c.gbnf",
+        "chess.gbnf",
+        "english.gbnf"
+      ]
+    },
+    "grpc": {
+      "path": "grpc",
+      "purpose": null,
+      "fileCount": 7,
+      "lastAccessed": 1776717013692,
+      "keyFiles": [
+        "CMakeLists.txt",
+        "grpc_bridge.cpp",
+        "grpc_bridge.h",
+        "grpc_proto_wrapper.h",
+        "grpc_transport.cpp"
+      ]
+    },
+    "include": {
+      "path": "include",
+      "purpose": null,
+      "fileCount": 2,
+      "lastAccessed": 1776717013693,
+      "keyFiles": [
+        "llama-cpp.h",
+        "llama.h"
+      ]
+    },
+    "licenses": {
+      "path": "licenses",
+      "purpose": null,
+      "fileCount": 1,
+      "lastAccessed": 1776717013693,
+      "keyFiles": [
+        "LICENSE-jsonhpp"
+      ]
+    },
+    "media": {
+      "path": "media",
+      "purpose": null,
+      "fileCount": 11,
+      "lastAccessed": 1776717013693,
+      "keyFiles": [
+        "llama0-banner.png",
+        "llama0-logo.png",
+        "llama1-banner.png",
+        "llama1-icon-transparent.png",
+        "llama1-icon-transparent.svg"
+      ]
+    },
+    "models": {
+      "path": "models",
+      "purpose": "Data models",
+      "fileCount": 45,
+      "lastAccessed": 1776717013694,
+      "keyFiles": [
+        "ggml-vocab-aquila.gguf",
+        "ggml-vocab-baichuan.gguf",
+        "ggml-vocab-bert-bge.gguf",
+        "ggml-vocab-bert-bge.gguf.inp",
+        "ggml-vocab-bert-bge.gguf.out"
+      ]
+    },
+    "plots_stream": {
+      "path": "plots_stream",
+      "purpose": null,
+      "fileCount": 0,
+      "lastAccessed": 1776717013694,
+      "keyFiles": []
+    },
+    "pocs": {
+      "path": "pocs",
+      "purpose": null,
+      "fileCount": 1,
+      "lastAccessed": 1776717013694,
+      "keyFiles": [
+        "CMakeLists.txt"
+      ]
+    },
+    "requirements": {
+      "path": "requirements",
+      "purpose": null,
+      "fileCount": 12,
+      "lastAccessed": 1776717013695,
+      "keyFiles": [
+        "requirements-all.txt",
+        "requirements-compare-llama-bench.txt",
+        "requirements-convert_hf_to_gguf.txt",
+        "requirements-convert_hf_to_gguf_update.txt",
+        "requirements-convert_legacy_llama.txt"
+      ]
+    },
+    "scripts": {
+      "path": "scripts",
+      "purpose": "Build/utility scripts",
+      "fileCount": 38,
+      "lastAccessed": 1776717013695,
+      "keyFiles": [
+        "bench-models.sh",
+        "build-info.sh",
+        "build-xcframework.sh",
+        "check-requirements.sh",
+        "compare-commits.sh"
+      ]
+    },
+    "src": {
+      "path": "src",
+      "purpose": "Source code",
+      "fileCount": 55,
+      "lastAccessed": 1776717013696,
+      "keyFiles": [
+        "CMakeLists.txt",
+        "llama-adapter.cpp",
+        "llama-adapter.h",
+        "llama-arch.cpp",
+        "llama-arch.h"
+      ]
+    },
+    "tests": {
+      "path": "tests",
+      "purpose": "Test files",
+      "fileCount": 49,
+      "lastAccessed": 1776717013696,
+      "keyFiles": [
+        "CMakeLists.txt",
+        "get-model.cpp",
+        "get-model.h",
+        "run-json-schema-to-grammar.mjs",
+        "test-alloc.cpp"
+      ]
+    },
+    "todo": {
+      "path": "todo",
+      "purpose": null,
+      "fileCount": 2,
+      "lastAccessed": 1776717013696,
+      "keyFiles": [
+        "BENCHMARK_TODO.md",
+        "DDS_TODO.md"
+      ]
+    },
+    "tools": {
+      "path": "tools",
+      "purpose": null,
+      "fileCount": 1,
+      "lastAccessed": 1776717013697,
+      "keyFiles": [
+        "CMakeLists.txt"
+      ]
+    },
+    "vendor": {
+      "path": "vendor",
+      "purpose": "Third-party code",
+      "fileCount": 0,
+      "lastAccessed": 1776717013697,
+      "keyFiles": []
+    },
+    "build-grpc/bin": {
+      "path": "build-grpc/bin",
+      "purpose": "Executable scripts",
+      "fileCount": 16,
+      "lastAccessed": 1776717013698,
+      "keyFiles": [
+        "libggml-base.so",
+        "libggml-base.so.0",
+        "libggml-base.so.0.9.7"
+      ]
+    },
+    "build-grpc-gpu/bin": {
+      "path": "build-grpc-gpu/bin",
+      "purpose": "Executable scripts",
+      "fileCount": 19,
+      "lastAccessed": 1776717013698,
+      "keyFiles": [
+        "libggml-base.so",
+        "libggml-base.so.0",
+        "libggml-base.so.0.9.7"
+      ]
+    },
+    "build-wsl/bin": {
+      "path": "build-wsl/bin",
+      "purpose": "Executable scripts",
+      "fileCount": 111,
+      "lastAccessed": 1776717013700,
+      "keyFiles": [
+        "benchmark_final",
+        "benchmark_multi_dds",
+        "benchmark_stream_dds"
+      ]
+    },
+    "ggml/src": {
+      "path": "ggml/src",
+      "purpose": "Source code",
+      "fileCount": 17,
+      "lastAccessed": 1776717013701,
+      "keyFiles": [
+        "CMakeLists.txt",
+        "ggml-alloc.c",
+        "ggml-backend-dl.cpp"
+      ]
+    },
+    "gguf-py/examples": {
+      "path": "gguf-py/examples",
+      "purpose": "Example code",
+      "fileCount": 2,
+      "lastAccessed": 1776717013702,
+      "keyFiles": [
+        "reader.py",
+        "writer.py"
+      ]
+    },
+    "gguf-py/tests": {
+      "path": "gguf-py/tests",
+      "purpose": "Test files",
+      "fileCount": 3,
+      "lastAccessed": 1776717013703,
+      "keyFiles": [
+        "__init__.py",
+        "test_metadata.py",
+        "test_quants.py"
+      ]
+    }
+  },
+  "hotPaths": [
+    {
+      "path": "tools/server/server.cpp",
+      "accessCount": 7,
+      "lastAccessed": 1776721518231,
+      "type": "directory"
+    },
+    {
+      "path": "tools/server/server-context.cpp",
+      "accessCount": 2,
+      "lastAccessed": 1776720925489,
+      "type": "directory"
+    },
+    {
+      "path": "dds",
+      "accessCount": 1,
+      "lastAccessed": 1776720883598,
+      "type": "directory"
+    },
+    {
+      "path": "tools/server",
+      "accessCount": 1,
+      "lastAccessed": 1776720914212,
+      "type": "directory"
+    }
+  ],
+  "userDirectives": []
+}

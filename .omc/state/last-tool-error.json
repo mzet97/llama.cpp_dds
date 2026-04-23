@@ -1,0 +1,7 @@
+{
+  "tool_name": "Bash",
+  "tool_input_preview": "{\"command\":\"echo \\\"--- 2 untracked ---\\\"; git status --short | grep '^??'; echo; echo \\\"--- Amostra de 10 modificados ---\\\"; git status --short | grep '^ M' | head -10; echo; echo \\\"--- Diff size chec...",
+  "error": "Exit code 129\n--- 2 untracked ---\n?? .omc/\n?? index/\n\n--- Amostra de 10 modificados ---\n M -\n M .clang-format\n M .clang-tidy\n M .claude.json\n M .devops/cann.Dockerfile\n M .devops/cpu.Dockerfile\n M .devops/cuda-new.Dockerfile\n M .devops/cuda.Dockerfile\n M .devops/intel.Dockerfile\n M .devops/llama-cli-cann.Dockerfile\n\n--- Diff size check (primeiro arquivo) ---\nerror: invalid option: -\nusage: git diff [<options>] [<commit>] [--] [<path>...]\n   or: git diff [<options>] --cached [--merge-base] [<comm...",
+  "timestamp": "2026-04-23T02:22:16.541Z",
+  "retry_count": 1
+}
