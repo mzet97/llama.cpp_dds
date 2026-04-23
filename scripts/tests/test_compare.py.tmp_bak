@@ -6,7 +6,7 @@ import sys
 
 def test_http(prompt, max_tokens):
     data = {
-        "model": "qwen3.5-0.8b",
+        "model": "phi4-mini",
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": max_tokens,
         "temperature": 0.3

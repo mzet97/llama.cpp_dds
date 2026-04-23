@@ -31,8 +31,8 @@ int main(int argc, char * argv[]) {
         prompt = argv[2];
     }
 
-    // Optional model name via argv[3] (default: qwen3.5-0.8b)
-    std::string model_name = "qwen3.5-0.8b";
+    // Optional model name via argv[3] (default: phi4-mini)
+    std::string model_name = "phi4-mini";
     if (argc > 3) {
         model_name = argv[3];
     }

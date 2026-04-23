@@ -14,7 +14,7 @@ HOST = "127.0.0.1"
 PORT = 8080
 NUM_TESTS = 64  # overridden by argv[1] - N=64 for statistical significance per Cohen (1988)
 
-MODEL = "qwen3.5-0.8b"  # must match the model loaded by the server (qwen3.5-0.8b, qwen3.5-9b, etc.)
+MODEL = "phi4-mini"  # must match the model loaded by the server (phi4-mini, qwen3.5-9b, etc.)
 
 PROMPTS = [
     {"name": "simple", "prompt": "What is 2+2?"},

@@ -24,8 +24,8 @@ static const char * TOPIC_REQUEST  = "llama_chat_completion_request";
 static const char * TOPIC_RESPONSE = "llama_chat_completion_response";
 
 // Default model name; can be overridden via argv[3].
-// Must match the model loaded by the server (e.g., qwen3.5-0.8b, qwen3.5-9b).
-static const char * DEFAULT_MODEL = "qwen3.5-0.8b";
+// Must match the model loaded by the server (e.g., phi4-mini, qwen3.5-9b).
+static const char * DEFAULT_MODEL = "phi4-mini";
 
 struct PromptTest {
     const char * name;

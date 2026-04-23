@@ -237,7 +237,7 @@ python main.py --port 8080 --dds-domain 0
 
 ```bash
 cd agent/python
-python agent_llm.py --model-path ../models/qwen3.5-0.8b.gguf
+python agent_llm.py --model-path ../models/phi4-mini.gguf
 ```
 
 ### 4. Testar
@@ -246,7 +246,7 @@ python agent_llm.py --model-path ../models/qwen3.5-0.8b.gguf
 curl -X POST http://localhost:8080/api/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "qwen3.5-0.8b",
+    "model": "phi4-mini",
     "messages": [{"role": "user", "content": "Hello!"}]
   }'
 ```

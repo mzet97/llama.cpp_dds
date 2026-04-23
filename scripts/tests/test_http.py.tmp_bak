@@ -3,7 +3,7 @@ import urllib.request
 import json
 
 data = {
-    "model": "qwen3.5-0.8b",
+    "model": "phi4-mini",
     "messages": [{"role": "user", "content": "What is 2+2?"}],
     "max_tokens": 20,
     "temperature": 0.3

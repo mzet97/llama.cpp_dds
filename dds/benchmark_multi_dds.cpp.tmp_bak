@@ -35,7 +35,7 @@
 
 static const char * TOPIC_REQUEST  = "llama_chat_completion_request";
 static const char * TOPIC_RESPONSE = "llama_chat_completion_response";
-static const char * DEFAULT_MODEL  = "qwen3.5-0.8b";
+static const char * DEFAULT_MODEL  = "phi4-mini";
 
 struct PromptDef {
     const char * name;

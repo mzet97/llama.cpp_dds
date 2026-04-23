@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-HTTP Client Python - Test with Phi-4-mini model
+HTTP Client Python - Test with Qwen3.5-0.8B model
 Measures inference time for the DDS-enabled server
 """
 
@@ -17,7 +17,7 @@ def main():
     prompt = "Some os 4 primeiros números deste ano (2026)."
 
     print("=" * 60)
-    print("HTTP Client - Phi-4-mini Inference Test")
+    print("HTTP Client - Qwen3.5-0.8B Inference Test")
     print("=" * 60)
     print(f"Server: {host}:{port}")
     print(f"Prompt: {prompt}")
@@ -25,7 +25,7 @@ def main():
 
     # Prepare request
     payload = json.dumps({
-        "model": "phi4-mini",
+        "model": "qwen3.5-0.8b",
         "messages": [
             {"role": "user", "content": prompt}
         ],
