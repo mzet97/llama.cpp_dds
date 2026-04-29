@@ -1,0 +1,42 @@
+# CMakeLists.txt snippet — adicionar ao build do llama.cpp_dds.
+#
+# Esse snippet pressupoe que CycloneDDS esta encontravel via find_package
+# (ou o caminho dele esta no CMAKE_PREFIX_PATH) e que idlc esta no PATH.
+#
+# Para incluir, edite o CMakeLists.txt do llama.cpp_dds e adicione:
+#
+#     option(LLAMA_DDS_V4 "Build data-centric v4 bridge" OFF)
+#     if (LLAMA_DDS_V4)
+#         include(dds/v4/CMakeLists.txt.snippet)
+#     endif()
+#
+# Apos isso, ative com -DLLAMA_DDS_V4=ON no cmake.
+
+# 1) Gera headers C dos tipos IDL
+set(_v4_idl ${CMAKE_CURRENT_SOURCE_DIR}/dds/v4/idl/OrchestratorV4.idl)
+set(_v4_gen_dir ${CMAKE_CURRENT_BINARY_DIR}/dds/v4/idl)
+file(MAKE_DIRECTORY ${_v4_gen_dir})
+
+add_custom_command(
+    OUTPUT  ${_v4_gen_dir}/OrchestratorV4.c
+            ${_v4_gen_dir}/OrchestratorV4.h
+    COMMAND idlc -l c ${_v4_idl}
+    WORKING_DIRECTORY ${_v4_gen_dir}
+    DEPENDS ${_v4_idl}
+    COMMENT "Generating C bindings for OrchestratorV4.idl"
+)
+
+# 2) Biblioteca v4_bridge
+add_library(v4_bridge STATIC
+    dds/v4/dds_v4_bridge.cpp
+    ${_v4_gen_dir}/OrchestratorV4.c
+)
+target_include_directories(v4_bridge PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/dds/v4
+    ${_v4_gen_dir}
+)
+target_link_libraries(v4_bridge PUBLIC CycloneDDS::ddsc)
+
+# 3) Linkar ao llama-server
+# target_link_libraries(llama-server PRIVATE v4_bridge)
+# target_compile_definitions(llama-server PRIVATE LLAMA_DDS_V4=1)

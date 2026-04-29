@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "lastScanned": 1776717013704,
+  "lastScanned": 1777475803643,
   "projectRoot": "/Users/zeitune/Documents/tese/llama.cpp_dds",
   "techStack": {
     "languages": [
@@ -61,14 +61,14 @@
       "path": "benches",
       "purpose": null,
       "fileCount": 0,
-      "lastAccessed": 1776717013685,
+      "lastAccessed": 1777475803622,
       "keyFiles": []
     },
     "build": {
       "path": "build",
       "purpose": "Build output",
-      "fileCount": 17,
-      "lastAccessed": 1776717013686,
+      "fileCount": 18,
+      "lastAccessed": 1777475803623,
       "keyFiles": [
         "CMakeCache 2.txt",
         "CMakeCache 3.txt",
@@ -81,7 +81,7 @@
       "path": "build-grpc",
       "purpose": null,
       "fileCount": 10,
-      "lastAccessed": 1776717013687,
+      "lastAccessed": 1777475803623,
       "keyFiles": [
         "CMakeCache.txt",
         "CTestTestfile.cmake",
@@ -94,7 +94,7 @@
       "path": "build-grpc-gpu",
       "purpose": null,
       "fileCount": 10,
-      "lastAccessed": 1776717013687,
+      "lastAccessed": 1777475803624,
       "keyFiles": [
         "CMakeCache.txt",
         "CTestTestfile.cmake",
@@ -107,7 +107,7 @@
       "path": "build-wsl",
       "purpose": null,
       "fileCount": 10,
-      "lastAccessed": 1776717013688,
+      "lastAccessed": 1777475803624,
       "keyFiles": [
         "CMakeCache.txt",
         "CTestTestfile.cmake",
@@ -120,7 +120,7 @@
       "path": "ci",
       "purpose": null,
       "fileCount": 3,
-      "lastAccessed": 1776717013688,
+      "lastAccessed": 1777475803625,
       "keyFiles": [
         "README-MUSA.md",
         "README.md",
@@ -131,7 +131,7 @@
       "path": "cmake",
       "purpose": null,
       "fileCount": 11,
-      "lastAccessed": 1776717013689,
+      "lastAccessed": 1777475803625,
       "keyFiles": [
         "arm64-apple-clang.cmake",
         "arm64-windows-llvm.cmake",
@@ -144,7 +144,7 @@
       "path": "common",
       "purpose": null,
       "fileCount": 47,
-      "lastAccessed": 1776717013689,
+      "lastAccessed": 1777475803626,
       "keyFiles": [
         "CMakeLists.txt",
         "arg.cpp",
@@ -157,7 +157,7 @@
       "path": "dds",
       "purpose": null,
       "fileCount": 55,
-      "lastAccessed": 1776717013690,
+      "lastAccessed": 1777475803627,
       "keyFiles": [
         "CLAUDE.md",
         "CMakeLists.txt",
@@ -170,7 +170,7 @@
       "path": "docs",
       "purpose": "Documentation",
       "fileCount": 15,
-      "lastAccessed": 1776717013690,
+      "lastAccessed": 1777475803627,
       "keyFiles": [
         "CLAUDE.md",
         "DDS_QUALITY_REPORT.md",
@@ -183,7 +183,7 @@
       "path": "examples",
       "purpose": "Example code",
       "fileCount": 12,
-      "lastAccessed": 1776717013691,
+      "lastAccessed": 1777475803628,
       "keyFiles": [
         "CMakeLists.txt",
         "convert_legacy_llama.py",
@@ -196,7 +196,7 @@
       "path": "ggml",
       "purpose": null,
       "fileCount": 2,
-      "lastAccessed": 1776717013691,
+      "lastAccessed": 1777475803628,
       "keyFiles": [
         "CMakeLists.txt"
       ]
@@ -205,7 +205,7 @@
       "path": "gguf-py",
       "purpose": null,
       "fileCount": 3,
-      "lastAccessed": 1776717013692,
+      "lastAccessed": 1777475803628,
       "keyFiles": [
         "LICENSE",
         "README.md",
@@ -216,7 +216,7 @@
       "path": "grammars",
       "purpose": null,
       "fileCount": 9,
-      "lastAccessed": 1776717013692,
+      "lastAccessed": 1777475803628,
       "keyFiles": [
         "README.md",
         "arithmetic.gbnf",
@@ -229,7 +229,7 @@
       "path": "grpc",
       "purpose": null,
       "fileCount": 7,
-      "lastAccessed": 1776717013692,
+      "lastAccessed": 1777475803628,
       "keyFiles": [
         "CMakeLists.txt",
         "grpc_bridge.cpp",
@@ -242,17 +242,30 @@
       "path": "include",
       "purpose": null,
       "fileCount": 2,
-      "lastAccessed": 1776717013693,
+      "lastAccessed": 1777475803629,
       "keyFiles": [
         "llama-cpp.h",
         "llama.h"
+      ]
+    },
+    "index": {
+      "path": "index",
+      "purpose": null,
+      "fileCount": 457,
+      "lastAccessed": 1777475803630,
+      "keyFiles": [
+        "LlamaDDS.c.8C033A0EFEF7FD38.idx",
+        "LlamaDDS.h.D909A7D8ACB0F572.idx",
+        "afmoe.cpp.0D82B049B02B0CC6.idx",
+        "amx.cpp.FA2C5EFA408C4342.idx",
+        "amx.h.33752017ED23B83F.idx"
       ]
     },
     "licenses": {
       "path": "licenses",
       "purpose": null,
       "fileCount": 1,
-      "lastAccessed": 1776717013693,
+      "lastAccessed": 1777475803630,
       "keyFiles": [
         "LICENSE-jsonhpp"
       ]
@@ -261,7 +274,7 @@
       "path": "media",
       "purpose": null,
       "fileCount": 11,
-      "lastAccessed": 1776717013693,
+      "lastAccessed": 1777475803630,
       "keyFiles": [
         "llama0-banner.png",
         "llama0-logo.png",
@@ -274,7 +287,7 @@
       "path": "models",
       "purpose": "Data models",
       "fileCount": 45,
-      "lastAccessed": 1776717013694,
+      "lastAccessed": 1777475803631,
       "keyFiles": [
         "ggml-vocab-aquila.gguf",
         "ggml-vocab-baichuan.gguf",
@@ -287,14 +300,14 @@
       "path": "plots_stream",
       "purpose": null,
       "fileCount": 0,
-      "lastAccessed": 1776717013694,
+      "lastAccessed": 1777475803631,
       "keyFiles": []
     },
     "pocs": {
       "path": "pocs",
       "purpose": null,
       "fileCount": 1,
-      "lastAccessed": 1776717013694,
+      "lastAccessed": 1777475803631,
       "keyFiles": [
         "CMakeLists.txt"
       ]
@@ -303,7 +316,7 @@
       "path": "requirements",
       "purpose": null,
       "fileCount": 12,
-      "lastAccessed": 1776717013695,
+      "lastAccessed": 1777475803631,
       "keyFiles": [
         "requirements-all.txt",
         "requirements-compare-llama-bench.txt",
@@ -316,7 +329,7 @@
       "path": "scripts",
       "purpose": "Build/utility scripts",
       "fileCount": 38,
-      "lastAccessed": 1776717013695,
+      "lastAccessed": 1777475803631,
       "keyFiles": [
         "bench-models.sh",
         "build-info.sh",
@@ -329,7 +342,7 @@
       "path": "src",
       "purpose": "Source code",
       "fileCount": 55,
-      "lastAccessed": 1776717013696,
+      "lastAccessed": 1777475803632,
       "keyFiles": [
         "CMakeLists.txt",
         "llama-adapter.cpp",
@@ -342,7 +355,7 @@
       "path": "tests",
       "purpose": "Test files",
       "fileCount": 49,
-      "lastAccessed": 1776717013696,
+      "lastAccessed": 1777475803632,
       "keyFiles": [
         "CMakeLists.txt",
         "get-model.cpp",
@@ -355,7 +368,7 @@
       "path": "todo",
       "purpose": null,
       "fileCount": 2,
-      "lastAccessed": 1776717013696,
+      "lastAccessed": 1777475803632,
       "keyFiles": [
         "BENCHMARK_TODO.md",
         "DDS_TODO.md"
@@ -365,7 +378,7 @@
       "path": "tools",
       "purpose": null,
       "fileCount": 1,
-      "lastAccessed": 1776717013697,
+      "lastAccessed": 1777475803632,
       "keyFiles": [
         "CMakeLists.txt"
       ]
@@ -374,14 +387,25 @@
       "path": "vendor",
       "purpose": "Third-party code",
       "fileCount": 0,
-      "lastAccessed": 1776717013697,
+      "lastAccessed": 1777475803632,
       "keyFiles": []
+    },
+    "build/bin": {
+      "path": "build/bin",
+      "purpose": "Executable scripts",
+      "fileCount": 100,
+      "lastAccessed": 1777475803634,
+      "keyFiles": [
+        "benchmark_final",
+        "libggml-base.0.9.7.dylib",
+        "libggml-blas.0.9.7.dylib"
+      ]
     },
     "build-grpc/bin": {
       "path": "build-grpc/bin",
       "purpose": "Executable scripts",
       "fileCount": 16,
-      "lastAccessed": 1776717013698,
+      "lastAccessed": 1777475803634,
       "keyFiles": [
         "libggml-base.so",
         "libggml-base.so.0",
@@ -392,7 +416,7 @@
       "path": "build-grpc-gpu/bin",
       "purpose": "Executable scripts",
       "fileCount": 19,
-      "lastAccessed": 1776717013698,
+      "lastAccessed": 1777475803634,
       "keyFiles": [
         "libggml-base.so",
         "libggml-base.so.0",
@@ -403,7 +427,7 @@
       "path": "build-wsl/bin",
       "purpose": "Executable scripts",
       "fileCount": 111,
-      "lastAccessed": 1776717013700,
+      "lastAccessed": 1777475803635,
       "keyFiles": [
         "benchmark_final",
         "benchmark_multi_dds",
@@ -414,7 +438,7 @@
       "path": "ggml/src",
       "purpose": "Source code",
       "fileCount": 17,
-      "lastAccessed": 1776717013701,
+      "lastAccessed": 1777475803637,
       "keyFiles": [
         "CMakeLists.txt",
         "ggml-alloc.c",
@@ -425,7 +449,7 @@
       "path": "gguf-py/examples",
       "purpose": "Example code",
       "fileCount": 2,
-      "lastAccessed": 1776717013702,
+      "lastAccessed": 1777475803637,
       "keyFiles": [
         "reader.py",
         "writer.py"
@@ -435,7 +459,7 @@
       "path": "gguf-py/tests",
       "purpose": "Test files",
       "fileCount": 3,
-      "lastAccessed": 1776717013703,
+      "lastAccessed": 1777475803637,
       "keyFiles": [
         "__init__.py",
         "test_metadata.py",
@@ -443,31 +467,6 @@
       ]
     }
   },
-  "hotPaths": [
-    {
-      "path": "tools/server/server.cpp",
-      "accessCount": 7,
-      "lastAccessed": 1776721518231,
-      "type": "directory"
-    },
-    {
-      "path": "tools/server/server-context.cpp",
-      "accessCount": 2,
-      "lastAccessed": 1776720925489,
-      "type": "directory"
-    },
-    {
-      "path": "dds",
-      "accessCount": 1,
-      "lastAccessed": 1776720883598,
-      "type": "directory"
-    },
-    {
-      "path": "tools/server",
-      "accessCount": 1,
-      "lastAccessed": 1776720914212,
-      "type": "directory"
-    }
-  ],
+  "hotPaths": [],
   "userDirectives": []
 }

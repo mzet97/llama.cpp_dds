@@ -1,0 +1,141 @@
+// OrchestratorV4.idl
+// Tipos canonicos do espaco de dados v4 do DDS-LLM-Orchestrator.
+//
+// Espelha (em C/C++) os tipos definidos em
+// dds_orchestrator_v4/dds_backend/dds_types.py de modo binario-compativel
+// (mesma serializacao CDR, mesmas chaves).
+//
+// Compilar com:
+//     idlc -l c OrchestratorV4.idl
+// Gera OrchestratorV4.{c,h}.
+
+module dds_llm_orchestrator {
+
+    // ============================================================
+    // Topico Tasks
+    // ============================================================
+    //
+    // Cada tarefa e uma instancia identificada por task_id. O estado
+    // evolui PENDING -> ASSIGNED -> RUNNING -> DONE (ou FAILED via
+    // deadline).
+
+    // Estado da tarefa no ciclo de vida (espelha TaskStatus em models.py)
+    enum TaskStatus {
+        TS_PENDING,    // 0 - aguarda atribuicao
+        TS_ASSIGNED,   // 1 - atribuida a um agente
+        TS_RUNNING,    // 2 - inferencia em andamento
+        TS_DONE,       // 3 - concluida com sucesso
+        TS_FAILED      // 4 - falhou apos esgotar tentativas
+    };
+
+    enum TaskPriority {
+        TP_LOW,        // 1
+        TP_NORMAL,     // 5
+        TP_HIGH        // 10
+    };
+
+    enum ModelSpecialization {
+        MS_TEXT,
+        MS_VISION,
+        MS_EMBEDDING
+    };
+
+    // @topic
+    struct Task {
+        string task_id;
+        string client_id;
+        string assigned_agent;
+        long   model_required;     // ModelSpecialization
+        string model_name;
+        string messages_json;       // bounded em CDR pelo gerador
+        float  temperature;
+        unsigned long max_tokens;
+        boolean stream;
+        long   status;             // TaskStatus
+        long   priority;           // TaskPriority
+        unsigned long long created_at_ns;
+        unsigned long long assigned_at_ns;
+        unsigned long long started_at_ns;
+        unsigned long long completed_at_ns;
+        unsigned long long deadline_ns;
+        unsigned long retry_count;
+        string finish_reason;
+    };
+    #pragma keylist Task task_id
+
+    // ============================================================
+    // Topico AgentRegistry
+    // ============================================================
+
+    enum AgentHealth {
+        AH_OFFLINE,
+        AH_DEGRADED,
+        AH_HEALTHY
+    };
+
+    // @topic
+    struct AgentState {
+        string agent_id;
+        string hostname;
+        string model;
+        string specialization;
+        unsigned long slots_total;
+        unsigned long slots_busy;
+        unsigned long vram_total_mb;
+        unsigned long vram_used_mb;
+        float ema_latency_ms;
+        unsigned long completed_total;
+        unsigned long failed_total;
+        long   health;             // AgentHealth
+        unsigned long long last_update_ns;
+        unsigned long long uptime_seconds;
+    };
+    #pragma keylist AgentState agent_id
+
+    // ============================================================
+    // Topico TaskOutput
+    // ============================================================
+
+    enum FinishReason {
+        FR_NONE,
+        FR_COMPLETION,
+        FR_LENGTH,
+        FR_TIMEOUT,
+        FR_ERROR
+    };
+
+    // @topic
+    // Nota: 'sequence' e palavra reservada em IDL — usar seq_num.
+    struct TaskOutput {
+        string task_id;
+        unsigned long seq_num;
+        string content;
+        boolean is_final;
+        long   finish_reason;      // FinishReason
+        unsigned long long emitted_at_ns;
+    };
+    #pragma keylist TaskOutput task_id seq_num
+
+    // ============================================================
+    // Topico SystemMetrics
+    // ============================================================
+
+    enum ComponentType {
+        CT_ORCHESTRATOR,
+        CT_AGENT,
+        CT_LLAMA_SERVER,
+        CT_CLIENT
+    };
+
+    // @topic
+    struct SystemMetric {
+        string metric_name;
+        string component_id;
+        long   component_type;     // ComponentType
+        double value;
+        string unit;
+        unsigned long long timestamp_ns;
+    };
+    #pragma keylist SystemMetric metric_name component_id
+
+};
