@@ -6,7 +6,7 @@
 #include "dds/dds.h"
 #include "dds_idl_wrapper.h"
 #include "dds_utils.h"  // shared thread-safe UUID generator
-#include "idl/LlamaDDS.h"
+#include "idl/OrchestratorDDS.h"
 
 #include <algorithm>
 #include <chrono>
@@ -20,8 +20,9 @@
 #include <thread>
 #include <vector>
 
-static const char * TOPIC_REQUEST  = "llama_chat_completion_request";
-static const char * TOPIC_RESPONSE = "llama_chat_completion_response";
+// Topics (unified with Python orchestrator)
+static const char * TOPIC_REQUEST  = "LLM.InferenceRequest";
+static const char * TOPIC_RESPONSE = "LLM.InferenceResult";
 
 // Default model name; can be overridden via argv[3].
 // Must match the model loaded by the server (e.g., qwen3.5-0.8b, qwen3.5-9b).

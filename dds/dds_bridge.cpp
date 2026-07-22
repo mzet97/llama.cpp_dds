@@ -60,7 +60,10 @@ class DDSBridgeImpl {
     }
 
     void stop() {
-        running_ = false;
+        {
+            std::lock_guard<std::mutex> lk(stop_mutex_);
+            running_ = false;
+        }
         stop_cv_.notify_all();
 
         if (worker_thread_.joinable()) {
@@ -106,8 +109,7 @@ class DDSBridgeImpl {
                                                      std::memory_order_relaxed)) {
                 return;
             }
-            // Yield to avoid busy-spin when N threads contend (e.g. burst shutdown).
-            std::this_thread::yield();
+            // CAS weak-fail-reload pattern is efficient for low contention
         }
     }
 

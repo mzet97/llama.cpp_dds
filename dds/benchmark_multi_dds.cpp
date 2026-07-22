@@ -21,7 +21,7 @@
 #include "dds/dds.h"
 #include "dds_idl_wrapper.h"
 #include "dds_utils.h"
-#include "idl/LlamaDDS.h"
+#include "idl/OrchestratorDDS.h"
 
 #include <algorithm>
 #include <chrono>
@@ -33,8 +33,9 @@
 #include <thread>
 #include <vector>
 
-static const char * TOPIC_REQUEST  = "llama_chat_completion_request";
-static const char * TOPIC_RESPONSE = "llama_chat_completion_response";
+// Topics (unified with Python orchestrator)
+static const char * TOPIC_REQUEST  = "LLM.InferenceRequest";
+static const char * TOPIC_RESPONSE = "LLM.InferenceResult";
 static const char * DEFAULT_MODEL  = "qwen3.5-0.8b";
 
 struct PromptDef {

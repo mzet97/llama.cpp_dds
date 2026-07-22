@@ -1,91 +1,73 @@
-// Orchestrator DDS IDL - Data types for DDS orchestration
-// This file defines the message types for agent orchestration
+// Unified DDS IDL for LLM Orchestrator
+// This file defines the message types used by BOTH the Python orchestrator
+// AND the C++ llama-server-dds, ensuring a single topic namespace.
+//
+// Topic names match the Python orchestrator's DDSDataSpace:
+//   - LLM.InferenceRequest
+//   - LLM.InferenceResult
+//   - LLM.InferenceError
+//   - ServerStatus (llama-server heartbeat)
+//
+// Key design decisions:
+//   - messages_json is a JSON string (not structured ChatMessage sequence)
+//     This allows the Python orchestrator to pass messages without conversion.
+//   - The C++ side parses JSON from messages_json when needed.
+//   - ServerStatus uses BEST_EFFORT + VOLATILE for lightweight heartbeat.
 
-#pragma extensibility FINAL
 module orchestrator {
 
-    // Agent registration message
-    struct AgentRegistration {
-        string agent_id;           // Unique UUID for the agent
-        string hostname;           // Host where agent is running
-        long port;                // HTTP port of the agent
-        string model;             // Model name (e.g., "tinyllama-1.1b")
-        string model_path;        // Full path to model file
-        long vram_available_mb;  // Available VRAM in MB
-        long vram_total_mb;      // Total VRAM in MB
-        long slots_idle;         // Number of idle slots
-        long slots_total;        // Total slots
-        boolean vision_enabled;   // Supports vision models
-        boolean reasoning_enabled; // Supports reasoning models
-        long long registered_at; // Registration timestamp (epoch ms)
+    // LLM Inference Request
+    // Published by: LLM Gateway (Python), Agents (Python)
+    // Subscribed by: llama-server-dds (C++), LLM Gateway (Python)
+    struct LLMInferenceRequest {
+        string request_id;           // UUID for correlation
+        string task_id;              // Task UUID from orchestrator
+        string agent_id;             // Agent UUID that made the request
+        string model_name;           // Model name (e.g., "qwen3.5-0.8b")
+        string messages_json;        // JSON array of {role, content} objects
+        float temperature;           // Sampling temperature (default 0.7)
+        unsigned long max_tokens;    // Max tokens to generate
+        boolean stream;              // Enable streaming mode
+        long security_level;         // SecurityLevel enum (0=PUBLIC, 1=INTERNAL, etc.)
+        string provider_constraint;  // "ANY", "LOCAL_ONLY", "CLOUD_ONLY"
+        unsigned long long created_at_ns;  // Timestamp (nanoseconds)
     };
 
-    // Agent status heartbeat
-    struct AgentStatus {
-        string agent_id;         // Agent UUID
-        string state;            // "idle", "busy", "error"
-        long current_slots;      // Currently used slots
-        long idle_slots;         // Idle slots
-        long memory_usage_mb;    // RAM usage in MB
-        long vram_usage_mb;     // VRAM usage in MB
-        string current_model;    // Currently loaded model
-        long long last_heartbeat; // Timestamp (epoch ms)
+    // LLM Inference Result (streaming chunks)
+    // Published by: llama-server-dds (C++), LLM Gateway (Python)
+    // Subscribed by: Agents (Python), LLM Gateway (Python)
+    struct LLMInferenceResult {
+        string request_id;           // Correlates with request
+        unsigned long seq_num;       // Sequence number for ordering
+        string content;              // Generated text chunk
+        boolean is_final;            // True on last chunk
+        long finish_reason;          // FinishReason enum (0=NONE, 1=COMPLETION, etc.)
+        string model_used;           // Model that generated the response
+        unsigned long tokens_prompt;     // Tokens in prompt
+        unsigned long tokens_completion; // Tokens generated
+        unsigned long long emitted_at_ns;  // Timestamp (nanoseconds)
     };
 
-    // Task request from orchestrator to agent
-    struct TaskRequest {
-        string task_id;           // Unique task UUID
-        string requester_id;    // Who requested this task
-        string task_type;         // "chat", "completion", "embedding"
-        string messages_json;    // JSON serialized messages
-        long priority;          // Priority 1-10
-        long timeout_ms;         // Timeout in milliseconds
-        boolean requires_context; // Needs conversation context
-        string context_id;       // Context ID if needed
-        long long created_at;   // Creation timestamp (epoch ms)
-        boolean stream;          // Whether to stream the response
-        string target_agent_id; // Target agent ID (empty = broadcast)
+    // LLM Inference Error
+    // Published by: llama-server-dds (C++), LLM Gateway (Python)
+    // Subscribed by: Agents (Python), LLM Gateway (Python)
+    struct LLMInferenceError {
+        string request_id;           // Correlates with request
+        long error_code;             // HTTP-style error code
+        string error_message;        // Human-readable error
+        string provider;             // Provider that generated the error
+        boolean retriable;           // Whether the request can be retried
+        unsigned long long emitted_at_ns;  // Timestamp (nanoseconds)
     };
 
-    // Task response from agent to orchestrator
-    struct TaskResponse {
-        string task_id;           // Task UUID
-        string agent_id;          // Agent UUID
-        string content;           // Generated text
-        boolean is_final;        // Is this the final response
-        long prompt_tokens;       // Tokens in prompt
-        long completion_tokens;  // Tokens generated
-        long processing_time_ms; // Processing time
-        boolean success;          // Did the task succeed
-        string error_message;   // Error message if failed
-        long long created_at;   // Response timestamp (epoch ms)
-    };
-
-    // Client request (external client to orchestrator)
-    struct ClientRequest {
-        string request_id;        // Client request UUID
-        string client_id;         // Client identifier
-        string task_type;        // "chat", "completion"
-        string messages_json;    // JSON serialized messages
-        long priority;           // Priority 1-10
-        long timeout_ms;         // Timeout in ms
-        boolean requires_context;
-        long long created_at;    // Creation timestamp (epoch ms)
-        boolean stream;          // Whether to stream the response
-        long max_tokens;         // Max tokens to generate (0 = use default)
-        float temperature;       // Sampling temperature (-1 = use default)
-    };
-
-    // Client response (orchestrator to external client)
-    struct ClientResponse {
-        string request_id;        // Client request UUID
-        string client_id;         // Client identifier
-        string content;            // Generated text
-        boolean is_final;
-        long prompt_tokens;
-        long completion_tokens;
-        long processing_time_ms;
-        boolean success;
-        string error_message;
+    // Server Status (heartbeat)
+    // Published by: llama-server-dds (C++)
+    // Subscribed by: LLM Gateway (Python), monitoring tools
+    struct ServerStatus {
+        string server_id;            // Unique server identifier
+        long slots_idle;             // Number of idle inference slots
+        long slots_processing;       // Number of active inference slots
+        string model_loaded;         // Currently loaded model name
+        boolean ready;               // Server ready for requests
     };
 };

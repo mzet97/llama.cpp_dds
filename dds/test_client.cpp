@@ -14,11 +14,13 @@
 #include "dds/dds.h"
 #include "dds_idl_wrapper.h"  // For cleanup helper
 #include "dds_utils.h"        // shared thread-safe UUID generator
-#include "idl/LlamaDDS.h"
+#include "idl/OrchestratorDDS.h"
 
-// Topics
-static const char * TOPIC_REQUEST  = "llama_chat_completion_request";
-static const char * TOPIC_RESPONSE = "llama_chat_completion_response";
+using namespace llama_dds;
+
+// Topics (unified with Python orchestrator)
+static const char * TOPIC_REQUEST  = "LLM.InferenceRequest";
+static const char * TOPIC_RESPONSE = "LLM.InferenceResult";
 
 int main(int argc, char * argv[]) {
     int domain_id = 0;
@@ -52,14 +54,14 @@ int main(int argc, char * argv[]) {
 
     // Create topics
     dds_entity_t request_topic =
-        dds_create_topic(participant, &llama_ChatCompletionRequest_desc, TOPIC_REQUEST, NULL, NULL);
+        dds_create_topic(participant, &orchestrator_LLMInferenceRequest_desc, TOPIC_REQUEST, NULL, NULL);
     if (request_topic < 0) {
         std::cerr << "Failed to create request topic: " << dds_strretcode(-request_topic) << std::endl;
         return 1;
     }
 
     dds_entity_t response_topic =
-        dds_create_topic(participant, &llama_ChatCompletionResponse_desc, TOPIC_RESPONSE, NULL, NULL);
+        dds_create_topic(participant, &orchestrator_LLMInferenceResult_desc, TOPIC_RESPONSE, NULL, NULL);
     if (response_topic < 0) {
         std::cerr << "Failed to create response topic: " << dds_strretcode(-response_topic) << std::endl;
         return 1;
@@ -96,24 +98,18 @@ int main(int argc, char * argv[]) {
     std::this_thread::sleep_for(std::chrono::seconds(2));
 
     // Create and send a request
-    llama_ChatCompletionRequest req;
+    orchestrator_LLMInferenceRequest req;
     memset(&req, 0, sizeof(req));
 
-    req.request_id  = dds_string_dup(llama_dds::generate_uuid().c_str());
-    req.model       = dds_string_dup(model_name.c_str());
-    req.temperature = 0.3f;
-    req.max_tokens  = 50;
-    req.stream      = false;
-
-    // Add test messages
-    req.messages._maximum           = 1;
-    req.messages._length            = 1;
-    req.messages._buffer            = (llama_ChatMessage *) malloc(sizeof(llama_ChatMessage));
-    req.messages._buffer[0].role    = dds_string_dup("user");
-    req.messages._buffer[0].content = dds_string_dup(prompt.c_str());
+    req.request_id    = dds_string_dup(llama_dds::generate_uuid().c_str());
+    req.model_name    = dds_string_dup(model_name.c_str());
+    req.messages_json = dds_string_dup(("[{\"role\":\"user\",\"content\":\"" + prompt + "\"}]").c_str());
+    req.temperature   = 0.3f;
+    req.max_tokens    = 50;
+    req.stream        = false;
 
     std::cout << "Sending request: " << req.request_id << std::endl;
-    std::cout << "Model: " << req.model << std::endl;
+    std::cout << "Model: " << req.model_name << std::endl;
     std::cout << "Temperature: " << req.temperature << std::endl;
     std::cout << "Max tokens: " << req.max_tokens << std::endl;
 
@@ -145,12 +141,10 @@ int main(int argc, char * argv[]) {
         dds_sample_info_t infos[1];
         int               n = dds_take(response_reader, samples, infos, 1, 1);
         if (n > 0 && infos[0].valid_data) {
-            llama_ChatCompletionResponse * resp = (llama_ChatCompletionResponse *) samples[0];
+            orchestrator_LLMInferenceResult * resp = (orchestrator_LLMInferenceResult *) samples[0];
             std::cout << "\n=== Response received ===" << std::endl;
             std::cout << "Request ID: " << (resp->request_id ? resp->request_id : "(null)") << std::endl;
-            std::cout << "Model: " << (resp->model ? resp->model : "(null)") << std::endl;
             std::cout << "Content: " << (resp->content ? resp->content : "(null)") << std::endl;
-            std::cout << "Finish reason: " << (resp->finish_reason ? resp->finish_reason : "null") << std::endl;
             std::cout << "Is final: " << (resp->is_final ? "true" : "false") << std::endl;
             std::cout << "========================" << std::endl;
         } else {

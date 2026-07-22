@@ -14,10 +14,11 @@
 #include <sstream>
 #include <thread>
 
-// Topic names
-static const char * TOPIC_REQUEST  = "llama_chat_completion_request";
-static const char * TOPIC_RESPONSE = "llama_chat_completion_response";
-static const char * TOPIC_STATUS   = "llama_server_status";
+// Topic names (unified with Python orchestrator)
+static const char * TOPIC_REQUEST  = "LLM.InferenceRequest";
+static const char * TOPIC_RESPONSE = "LLM.InferenceResult";
+static const char * TOPIC_ERROR    = "LLM.InferenceError";
+static const char * TOPIC_STATUS   = "ServerStatus";
 
 namespace llama_dds {
 
@@ -38,9 +39,9 @@ class DDSTransportImpl {
                 return false;
             }
 
-            // Create topics - using type names that match registered types
+            // Create topics - using orchestrator's unified types
             request_topic_ =
-                dds_create_topic(participant_, &llama_ChatCompletionRequest_desc, TOPIC_REQUEST, nullptr, nullptr);
+                dds_create_topic(participant_, &orchestrator_LLMInferenceRequest_desc, TOPIC_REQUEST, nullptr, nullptr);
             if (request_topic_ < 0) {
                 fprintf(stderr, "[DDS] Failed to create request topic: %d\n", request_topic_);
                 dds_delete(participant_); participant_ = 0;
@@ -48,14 +49,14 @@ class DDSTransportImpl {
             }
 
             response_topic_ =
-                dds_create_topic(participant_, &llama_ChatCompletionResponse_desc, TOPIC_RESPONSE, nullptr, nullptr);
+                dds_create_topic(participant_, &orchestrator_LLMInferenceResult_desc, TOPIC_RESPONSE, nullptr, nullptr);
             if (response_topic_ < 0) {
                 fprintf(stderr, "[DDS] Failed to create response topic: %d\n", response_topic_);
                 dds_delete(participant_); participant_ = 0;
                 return false;
             }
 
-            status_topic_ = dds_create_topic(participant_, &llama_ServerStatus_desc, TOPIC_STATUS, nullptr, nullptr);
+            status_topic_ = dds_create_topic(participant_, &orchestrator_ServerStatus_desc, TOPIC_STATUS, nullptr, nullptr);
             if (status_topic_ < 0) {
                 fprintf(stderr, "[DDS] Failed to create status topic: %d\n", status_topic_);
                 dds_delete(participant_); participant_ = 0;
@@ -87,8 +88,8 @@ class DDSTransportImpl {
                 return false;
             }
 
-            // NOTE: Status is published periodically — BEST_EFFORT + VOLATILE avoids
-            // accumulating stale history in the DDS broker for every heartbeat.
+            // Status QoS: BEST_EFFORT + VOLATILE for lightweight heartbeat
+            // Liveliness 1s for fast failure detection (vs 10s for Tasks/Agents in Python)
             dds_qos_t * status_qos = dds_create_qos();
             dds_qset_reliability(status_qos, DDS_RELIABILITY_BEST_EFFORT, 0);
             dds_qset_durability(status_qos, DDS_DURABILITY_VOLATILE);
@@ -102,6 +103,7 @@ class DDSTransportImpl {
             if (status_writer_ < 0) {
                 fprintf(stderr, "[DDS] Failed to create status writer: %d\n", status_writer_);
                 dds_delete_qos(qos);
+                dds_delete(participant_); participant_ = 0;  // Fix: clean up participant on error
                 return false;
             }
 
@@ -129,10 +131,8 @@ class DDSTransportImpl {
     void stop() {
         // Idempotent: only execute cleanup once
         bool was_running = running_.exchange(false);
-        if (!was_running || participant_ <= 0) {
-            return;
-        }
 
+        // Always join threads unconditionally (joinable() handles non-existent threads)
         if (reader_thread_.joinable()) {
             reader_thread_.join();
         }
@@ -141,7 +141,7 @@ class DDSTransportImpl {
             response_reader_thread_.join();
         }
 
-        // dds_delete(participant_) cascades to all children (topics, readers, writers).
+        // Always clean up participant if it was created (even if running_ was never set)
         if (participant_ > 0) {
             dds_delete(participant_);
             participant_ = 0;
@@ -151,7 +151,9 @@ class DDSTransportImpl {
         request_writer_ = response_reader_ = status_reader_ = 0;
         request_topic_ = response_topic_ = status_topic_ = 0;
 
-        fprintf(stderr, "[DDS] Transport stopped\n");
+        if (was_running) {
+            fprintf(stderr, "[DDS] Transport stopped\n");
+        }
     }
 
     void send_response(const llama_dds::ChatCompletionResponse & response) {
@@ -204,10 +206,10 @@ class DDSTransportImpl {
             }
 
             request_topic_ =
-                dds_create_topic(participant_, &llama_ChatCompletionRequest_desc, TOPIC_REQUEST, nullptr, nullptr);
+                dds_create_topic(participant_, &orchestrator_LLMInferenceRequest_desc, TOPIC_REQUEST, nullptr, nullptr);
             response_topic_ =
-                dds_create_topic(participant_, &llama_ChatCompletionResponse_desc, TOPIC_RESPONSE, nullptr, nullptr);
-            status_topic_ = dds_create_topic(participant_, &llama_ServerStatus_desc, TOPIC_STATUS, nullptr, nullptr);
+                dds_create_topic(participant_, &orchestrator_LLMInferenceResult_desc, TOPIC_RESPONSE, nullptr, nullptr);
+            status_topic_ = dds_create_topic(participant_, &orchestrator_ServerStatus_desc, TOPIC_STATUS, nullptr, nullptr);
 
             if (request_topic_ < 0 || response_topic_ < 0 || status_topic_ < 0) {
                 fprintf(stderr, "[DDS Client] Failed to create topics\n");
@@ -299,7 +301,8 @@ class DDSTransportImpl {
         }
         if (status_reader_ > 0) {
             if (dds_waitset_attach(ws, status_reader_, DDS_DATA_AVAILABLE_STATUS) < 0) {
-                fprintf(stderr, "[DDS Client] Failed to attach status_reader_ to waitset\n");
+                fprintf(stderr, "[DDS Client] Failed to attach status_reader_ to waitset; status updates disabled\n");
+                status_reader_ = 0;  // Prevent drain loop from trying
             }
         }
 
@@ -321,15 +324,15 @@ class DDSTransportImpl {
                 dds_return_t      n = dds_take(response_reader_, samples, infos, 1, 1);
                 if (n <= 0) break;
                 if (infos[0].valid_data && response_callback_) {
-                    auto * resp = static_cast<llama_ChatCompletionResponse *>(samples[0]);
+                    auto * resp = static_cast<orchestrator_LLMInferenceResult *>(samples[0]);
                     try {
-                        response_callback_(to_response(*resp));
+                        response_callback_(to_result(*resp));
                     } catch (const std::exception & e) {
                         fprintf(stderr, "[DDS Client] response callback error: %s\n", e.what());
                     }
-                    dds_sample_free(samples[0], &llama_ChatCompletionResponse_desc, DDS_FREE_ALL);
+                    dds_sample_free(samples[0], &orchestrator_LLMInferenceResult_desc, DDS_FREE_ALL);
                 } else if (samples[0]) {
-                    dds_sample_free(samples[0], &llama_ChatCompletionResponse_desc, DDS_FREE_ALL);
+                    dds_sample_free(samples[0], &orchestrator_LLMInferenceResult_desc, DDS_FREE_ALL);
                 }
             }
 
@@ -341,15 +344,15 @@ class DDSTransportImpl {
                     dds_return_t      n = dds_take(status_reader_, samples, infos, 1, 1);
                     if (n <= 0) break;
                     if (infos[0].valid_data) {
-                        auto * st = static_cast<llama_ServerStatus *>(samples[0]);
+                        auto * st = static_cast<orchestrator_ServerStatus *>(samples[0]);
                         try {
                             status_callback_(to_status(*st));
                         } catch (const std::exception & e) {
                             fprintf(stderr, "[DDS Client] status callback error: %s\n", e.what());
                         }
-                        dds_sample_free(samples[0], &llama_ServerStatus_desc, DDS_FREE_ALL);
+                        dds_sample_free(samples[0], &orchestrator_ServerStatus_desc, DDS_FREE_ALL);
                     } else if (samples[0]) {
-                        dds_sample_free(samples[0], &llama_ServerStatus_desc, DDS_FREE_ALL);
+                        dds_sample_free(samples[0], &orchestrator_ServerStatus_desc, DDS_FREE_ALL);
                     }
                 }
             }
@@ -397,12 +400,12 @@ class DDSTransportImpl {
 
                     if (n > 0) {
                         if (infos[0].valid_data) {
-                            auto * req = static_cast<llama_ChatCompletionRequest *>(samples[0]);
+                            auto * req = static_cast<orchestrator_LLMInferenceRequest *>(samples[0]);
                             try {
                                 auto request = to_request(*req);
 #ifdef DDS_DEBUG
                                 fprintf(stderr, "[DDS] Received request: id=%s, model=%s\n", request.request_id.c_str(),
-                                        request.model.c_str());
+                                        request.model_name.c_str());
 #endif
                                 if (request_callback_) {
                                     request_callback_(request);
@@ -410,9 +413,9 @@ class DDSTransportImpl {
                             } catch (const std::exception & e) {
                                 fprintf(stderr, "[DDS] Error processing request: %s\n", e.what());
                             }
-                            dds_sample_free(samples[0], &llama_ChatCompletionRequest_desc, DDS_FREE_ALL);
+                            dds_sample_free(samples[0], &orchestrator_LLMInferenceRequest_desc, DDS_FREE_ALL);
                         } else if (samples[0]) {
-                            dds_sample_free(samples[0], &llama_ChatCompletionRequest_desc, DDS_FREE_ALL);
+                            dds_sample_free(samples[0], &orchestrator_LLMInferenceRequest_desc, DDS_FREE_ALL);
                         }
                     } else {
                         if (n < 0) {
