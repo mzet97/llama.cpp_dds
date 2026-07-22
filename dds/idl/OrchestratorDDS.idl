@@ -13,6 +13,20 @@
 //     This allows the Python orchestrator to pass messages without conversion.
 //   - The C++ side parses JSON from messages_json when needed.
 //   - ServerStatus uses BEST_EFFORT + VOLATILE for lightweight heartbeat.
+//
+// NOTE: LLMInferenceRequest/Result/Error and ServerStatus are intentionally
+// KEYLESS — this matches the reconciliation already done on the Python side
+// (see `tese/src/rust/specs/000-dds-contract/spec.md`, REQ-003: "Tipos LLM
+// keyless... casar a reconciliação já feita no Python"), and is enforced by
+// `dds-contract`'s own tests (`llm_types_are_keyless`,
+// `idl_file_llm_structs_are_keyless_by_source`). An architecture review this
+// session flagged the keyless design as a theoretical fragility (a single
+// global instance means a KeepLast(N) history bound is shared across ALL
+// concurrent requests' chunks, not per-request) and briefly added `@key` here
+// — that was reverted after discovering this explicit, tested, spec'd
+// requirement. Do not add `@key` to these types without first updating REQ-003
+// and the Python side in lockstep; changing only the C++/Rust side would
+// silently break wire compatibility with the Python reference implementation.
 
 module orchestrator {
 

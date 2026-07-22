@@ -5,6 +5,8 @@
 
 #include "dds/dds.h"
 #include "dds_idl_wrapper.h"
+
+using namespace llama_dds;
 #include "dds_utils.h"  // shared thread-safe UUID generator
 #include "idl/OrchestratorDDS.h"
 
@@ -50,18 +52,15 @@ static double send_one(dds_entity_t   writer,
                        const char *   model_name) {
     std::string req_id = llama_dds::generate_uuid();
 
-    llama_ChatCompletionRequest req;
+    orchestrator_LLMInferenceRequest req;
     memset(&req, 0, sizeof(req));
-    req.request_id                  = dds_string_dup(req_id.c_str());
-    req.model                       = dds_string_dup(model_name);
-    req.temperature                 = 0.3f;
-    req.max_tokens                  = 1;  // patched to isolate DDS overhead
-    req.stream                      = false;
-    req.messages._maximum           = 1;
-    req.messages._length            = 1;
-    req.messages._buffer            = (llama_ChatMessage *) malloc(sizeof(llama_ChatMessage));
-    req.messages._buffer[0].role    = dds_string_dup("user");
-    req.messages._buffer[0].content = dds_string_dup(prompt);
+    req.request_id  = dds_string_dup(req_id.c_str());
+    req.model_name   = dds_string_dup(model_name);
+    req.temperature = 0.3f;
+    req.max_tokens  = 1;  // patched to isolate DDS overhead
+    req.stream      = false;
+    req.messages_json =
+        dds_string_dup(("[{\"role\":\"user\",\"content\":\"" + std::string(prompt) + "\"}]").c_str());
 
     auto start = std::chrono::high_resolution_clock::now();
     dds_write(writer, &req);
@@ -75,7 +74,7 @@ static double send_one(dds_entity_t   writer,
             dds_sample_info_t infos[1];
             int               n = dds_take(reader, samples, infos, 1, 1);
             if (n > 0 && infos[0].valid_data) {
-                auto * resp     = static_cast<llama_ChatCompletionResponse *>(samples[0]);
+                auto * resp     = static_cast<orchestrator_LLMInferenceResult *>(samples[0]);
                 // Match by request_id to ignore stale responses from warmup or
                 // previous iterations still queued in the DDS history buffer.
                 bool   id_match = resp->request_id && (req_id == resp->request_id);
@@ -161,14 +160,14 @@ int main(int argc, char * argv[]) {
     }
 
     dds_entity_t request_topic =
-        dds_create_topic(participant, &llama_ChatCompletionRequest_desc, TOPIC_REQUEST, NULL, NULL);
+        dds_create_topic(participant, &orchestrator_LLMInferenceRequest_desc, TOPIC_REQUEST, NULL, NULL);
     if (request_topic < 0) {
         std::cerr << "Failed to create request topic: " << dds_strretcode(-request_topic) << std::endl;
         dds_delete(participant);
         return 1;
     }
     dds_entity_t response_topic =
-        dds_create_topic(participant, &llama_ChatCompletionResponse_desc, TOPIC_RESPONSE, NULL, NULL);
+        dds_create_topic(participant, &orchestrator_LLMInferenceResult_desc, TOPIC_RESPONSE, NULL, NULL);
     if (response_topic < 0) {
         std::cerr << "Failed to create response topic: " << dds_strretcode(-response_topic) << std::endl;
         dds_delete(participant);

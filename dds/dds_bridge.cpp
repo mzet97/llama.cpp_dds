@@ -205,19 +205,31 @@ void DDSBridge::set_model_info(const std::string & model_name, bool ready, int n
 }
 
 void DDSBridge::handle_request(const ChatCompletionRequest & request) {
-    // Increment pending count BEFORE inserting into map to prevent race
-    // where a fast pop+complete could decrement before increment.
-    pimpl_->inc_pending();
-
     // Store request for tracking (FIFO via pending_order_, lookup via map).
+    // inc_pending() moved INSIDE this lock, gated on `inserted`: the previous
+    // version incremented unconditionally before the dedup check below, with
+    // a comment justifying that ordering as avoiding a race against a fast
+    // pop+complete. That race is real, but incrementing unconditionally
+    // introduced a different bug — a duplicate request_id (re-delivery from
+    // TRANSIENT_LOCAL, the `else` branch below) got counted again with no
+    // matching decrement (dec_pending() only fires once, when the request
+    // eventually completes), so pending_count_ drifts upward by one on every
+    // redelivery a long-running server sees, corrupting the
+    // slots_processing/slots_idle telemetry in ServerStatus over time.
+    // Incrementing here, under the SAME lock that performs the insertion,
+    // fixes both: it's atomic with the dedup check (no separate race window
+    // — a concurrent pop_pending_request(), which also takes `mutex_`, can
+    // only observe insertion+increment as one indivisible step, never one
+    // without the other), and it only fires for genuinely new requests.
     {
         std::lock_guard<std::mutex> lock(mutex_);
         auto [it, inserted] = pending_requests_.emplace(request.request_id, request);
         if (inserted) {
             pending_order_.push_back(request.request_id);
+            pimpl_->inc_pending();
         } else {
             // Duplicate request_id (re-delivery from TRANSIENT_LOCAL);
-            // keep newest payload but don't re-queue.
+            // keep newest payload but don't re-queue, don't re-count.
             it->second = request;
         }
     }

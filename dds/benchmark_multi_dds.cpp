@@ -20,6 +20,8 @@
 
 #include "dds/dds.h"
 #include "dds_idl_wrapper.h"
+
+using namespace llama_dds;
 #include "dds_utils.h"
 #include "idl/OrchestratorDDS.h"
 
@@ -62,18 +64,15 @@ static double send_one(dds_entity_t   writer,
                        const char *   model) {
     std::string req_id = llama_dds::generate_uuid();
 
-    llama_ChatCompletionRequest req;
+    orchestrator_LLMInferenceRequest req;
     memset(&req, 0, sizeof(req));
-    req.request_id                  = dds_string_dup(req_id.c_str());
-    req.model                       = dds_string_dup(model);
-    req.temperature                 = 0.3f;
-    req.max_tokens                  = 30;
-    req.stream                      = false;
-    req.messages._maximum           = 1;
-    req.messages._length            = 1;
-    req.messages._buffer            = (llama_ChatMessage *) malloc(sizeof(llama_ChatMessage));
-    req.messages._buffer[0].role    = dds_string_dup("user");
-    req.messages._buffer[0].content = dds_string_dup(prompt);
+    req.request_id  = dds_string_dup(req_id.c_str());
+    req.model_name   = dds_string_dup(model);
+    req.temperature = 0.3f;
+    req.max_tokens  = 30;
+    req.stream      = false;
+    req.messages_json =
+        dds_string_dup(("[{\"role\":\"user\",\"content\":\"" + std::string(prompt) + "\"}]").c_str());
 
     auto start = std::chrono::high_resolution_clock::now();
     dds_write(writer, &req);
@@ -86,7 +85,7 @@ static double send_one(dds_entity_t   writer,
             dds_sample_info_t infos[1];
             int               n = dds_take(reader, samples, infos, 1, 1);
             if (n > 0 && infos[0].valid_data) {
-                auto * resp = static_cast<llama_ChatCompletionResponse *>(samples[0]);
+                auto * resp = static_cast<orchestrator_LLMInferenceResult *>(samples[0]);
                 if (resp->request_id && req_id == resp->request_id && resp->is_final) {
                     double ms =
                         std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - start)
@@ -169,9 +168,9 @@ int main(int argc, char * argv[]) {
     }
 
     dds_entity_t req_topic =
-        dds_create_topic(participant, &llama_ChatCompletionRequest_desc, TOPIC_REQUEST, nullptr, nullptr);
+        dds_create_topic(participant, &orchestrator_LLMInferenceRequest_desc, TOPIC_REQUEST, nullptr, nullptr);
     dds_entity_t res_topic =
-        dds_create_topic(participant, &llama_ChatCompletionResponse_desc, TOPIC_RESPONSE, nullptr, nullptr);
+        dds_create_topic(participant, &orchestrator_LLMInferenceResult_desc, TOPIC_RESPONSE, nullptr, nullptr);
     if (req_topic < 0 || res_topic < 0) {
         std::cerr << "[C" << client_id << "] topic fail\n";
         dds_delete(participant);

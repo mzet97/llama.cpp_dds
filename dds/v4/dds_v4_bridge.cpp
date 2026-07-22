@@ -126,10 +126,21 @@ class V4BridgeImpl {
         dds_qos_t * qos_outputs = dds_create_qos();
         dds_qset_reliability(qos_outputs, DDS_RELIABILITY_RELIABLE,
                              DDS_SECS(10));
-        dds_qset_durability(qos_outputs, DDS_DURABILITY_VOLATILE);
+        // TRANSIENT_LOCAL (nao VOLATILE): revisao de arquitetura encontrou
+        // essa arvore com VOLATILE, divergindo da arvore antiga (que usa
+        // TRANSIENT_LOCAL) e do profile task_output() do lado Rust
+        // (qos.rs) que pede TransientLocal. Durability e uma politica de
+        // OFERTA/REQUISICAO no DDS: um reader pedindo TRANSIENT_LOCAL contra
+        // um writer que so oferece VOLATILE nao casa (silenciosamente, sem
+        // erro) - TaskOutput pararia de fluir para o Rust assim que essa
+        // arvore canonica for destravada e usada de verdade.
+        dds_qset_durability(qos_outputs, DDS_DURABILITY_TRANSIENT_LOCAL);
         dds_qset_history(qos_outputs, DDS_HISTORY_KEEP_LAST, 20);
         dds_qset_deadline(qos_outputs, DDS_SECS(10));
         dds_qset_ownership(qos_outputs, DDS_OWNERSHIP_EXCLUSIVE);
+        // Tuning que a arvore antiga tem e esta havia perdido.
+        dds_qset_transport_priority(qos_outputs, 8);
+        dds_qset_latency_budget(qos_outputs, DDS_MSECS(50));
 
         dds_qos_t * qos_metrics = dds_create_qos();
         dds_qset_reliability(qos_metrics, DDS_RELIABILITY_BEST_EFFORT, 0);
@@ -138,6 +149,22 @@ class V4BridgeImpl {
 
         // Reader de Tasks com filtro de conteudo
         // Filtro: assigned_agent == my_id AND status == 1 (ASSIGNED)
+        //
+        // NOTA (Rodada 5, 2026-07-22): este e um protocolo de claim
+        // CONFIRMADO — espera a task ja estar ASSIGNED (status=1) a este
+        // agente especifico, nao disputa tasks PENDING em corrida. E o
+        // desenho que bate com o agente Rust real e validado
+        // (`crates/agent/src/claim.rs` + `attempt_claim_and_process` em
+        // `crates/agent/src/dds.rs`), incluindo o fix de fairness da Bug 4
+        // (pool de writers com forca de ownership randomizada por task, ver
+        // OPTIMIZATION_PLAN.md). A copia divergente deste MESMO prototipo em
+        // `src/llama_cpp/dds/v4/dds_v4_bridge.cpp` ainda usa um protocolo de
+        // claim por CORRIDA mais antigo (filtro `assigned_agent = '' AND
+        // status = 0`, sem confirmacao) — nao e um bug desta arvore, e bit-
+        // rot entre duas copias de um prototipo ja morto (nenhuma esta
+        // conectada a um CMakeLists.txt real, so um `.snippet`). Se este v4
+        // nativo for retomado algum dia, ESTE design (confirmado) e o que
+        // deveria ser usado como base, nao o de `src/llama_cpp`.
         std::string filter_expr = "assigned_agent = '" + cfg_.agent_id +
                                   "' AND status = 1";
         // Em CycloneDDS C API, content-filtered topic e criado em duas etapas;

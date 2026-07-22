@@ -226,74 +226,75 @@ void server_queue::cleanup_pending_task(int id_target) {
 //
 
 void server_response::add_waiting_task_id(int id_task) {
-    RES_DBG("add task %d to waiting list. current waiting = %d (before add)\n", id_task, (int) waiting_task_ids.size());
-
-    std::unique_lock<std::mutex> lock(mutex_results);
-    waiting_task_ids.insert(id_task);
+    add_waiting_task_ids({id_task});
 }
 
 void server_response::add_waiting_task_ids(const std::unordered_set<int> & id_tasks) {
-    std::unique_lock<std::mutex> lock(mutex_results);
+    RES_DBG("add %d task(s) to waiting list\n", (int) id_tasks.size());
 
+    // One waiter shared by the whole group (post_tasks()'s parent+child
+    // tasks all complete under a single reader waiting on any-of-them).
+    auto waiter = std::make_shared<task_waiter>();
+    std::unique_lock<std::mutex> lock(mutex_map);
     for (const auto & id_task : id_tasks) {
-        RES_DBG("add task %d to waiting list. current waiting = %d (before add)\n", id_task, (int) waiting_task_ids.size());
-        waiting_task_ids.insert(id_task);
+        task_waiters[id_task] = waiter;
     }
 }
 
 void server_response::remove_waiting_task_id(int id_task) {
-    RES_DBG("remove task %d from waiting list. current waiting = %d (before remove)\n", id_task, (int) waiting_task_ids.size());
-
-    std::unique_lock<std::mutex> lock(mutex_results);
-    waiting_task_ids.erase(id_task);
-    // make sure to clean up all pending results
-    queue_results.erase(
-        std::remove_if(queue_results.begin(), queue_results.end(), [id_task](const server_task_result_ptr & res) {
-            return res->id == id_task;
-        }),
-        queue_results.end());
+    remove_waiting_task_ids({id_task});
 }
 
 void server_response::remove_waiting_task_ids(const std::unordered_set<int> & id_tasks) {
-    std::unique_lock<std::mutex> lock(mutex_results);
+    RES_DBG("remove %d task(s) from waiting list\n", (int) id_tasks.size());
 
+    std::unique_lock<std::mutex> lock(mutex_map);
     for (const auto & id_task : id_tasks) {
-        RES_DBG("remove task %d from waiting list. current waiting = %d (before remove)\n", id_task, (int) waiting_task_ids.size());
-        waiting_task_ids.erase(id_task);
+        task_waiters.erase(id_task);
     }
+    // Dropping the map's shared_ptr(s) here is enough: any results already
+    // queued on the waiter are freed with it, and once refcount hits zero
+    // (all ids in the group removed) the waiter itself is destroyed.
+}
+
+// Looks up the waiter registered for any id in `id_tasks` (all ids from the
+// same add_waiting_task_ids() call share one waiter, so the first hit is
+// sufficient). Returns nullptr if none is registered (already removed —
+// treated the same as "terminated" by callers, same as before).
+static std::shared_ptr<task_waiter> find_waiter(
+        std::mutex & mutex_map,
+        std::unordered_map<int, std::shared_ptr<task_waiter>> & task_waiters,
+        const std::unordered_set<int> & id_tasks) {
+    std::unique_lock<std::mutex> lock(mutex_map);
+    for (const auto & id_task : id_tasks) {
+        auto it = task_waiters.find(id_task);
+        if (it != task_waiters.end()) {
+            return it->second;
+        }
+    }
+    return nullptr;
 }
 
 server_task_result_ptr server_response::recv(const std::unordered_set<int> & id_tasks) {
-    while (true) {
-        std::unique_lock<std::mutex> lock(mutex_results);
-        // Wake on either shutdown or any matching/new result. Callers are
-        // responsible for handling a nullptr return as "terminated" — same
-        // contract as recv_with_timeout on timeout.
-        condition_results.wait(lock, [&]{
-            if (!running) {
-                return true;
-            }
-            for (const auto & r : queue_results) {
-                if (id_tasks.find(r->id) != id_tasks.end()) {
-                    return true;
-                }
-            }
-            return false;
-        });
-
-        if (!running) {
-            RES_DBG("%s : queue result stop (graceful)\n", "recv");
-            return nullptr;
-        }
-
-        for (size_t i = 0; i < queue_results.size(); i++) {
-            if (id_tasks.find(queue_results[i]->id) != id_tasks.end()) {
-                server_task_result_ptr res = std::move(queue_results[i]);
-                queue_results.erase(queue_results.begin() + i);
-                return res;
-            }
-        }
+    auto waiter = find_waiter(mutex_map, task_waiters, id_tasks);
+    if (!waiter) {
+        return nullptr;
     }
+
+    std::unique_lock<std::mutex> lock(waiter->mutex);
+    // Wake on either shutdown or a result landing for THIS waiter only —
+    // other tasks' send()s notify a different waiter's condition_variable
+    // entirely, so this never wakes spuriously for unrelated traffic.
+    waiter->cv.wait(lock, [&]{ return !running.load() || !waiter->results.empty(); });
+
+    if (!running.load() && waiter->results.empty()) {
+        RES_DBG("%s : queue result stop (graceful)\n", "recv");
+        return nullptr;
+    }
+
+    server_task_result_ptr res = std::move(waiter->results.front());
+    waiter->results.erase(waiter->results.begin());
+    return res;
 }
 
 server_task_result_ptr server_response::recv_with_timeout(const std::unordered_set<int> & id_tasks, int timeout) {
@@ -301,37 +302,30 @@ server_task_result_ptr server_response::recv_with_timeout(const std::unordered_s
 }
 
 server_task_result_ptr server_response::recv_with_timeout_ms(const std::unordered_set<int> & id_tasks, int timeout_ms) {
-    while (true) {
-        std::unique_lock<std::mutex> lock(mutex_results);
-
-        for (int i = 0; i < (int) queue_results.size(); i++) {
-            if (id_tasks.find(queue_results[i]->id) != id_tasks.end()) {
-                server_task_result_ptr res = std::move(queue_results[i]);
-                queue_results.erase(queue_results.begin() + i);
-                return res;
-            }
-        }
-
-        std::cv_status cr_res = condition_results.wait_for(lock, std::chrono::milliseconds(timeout_ms));
-        if (!running) {
-            RES_DBG("%s : queue result stop (graceful)\n", __func__);
-            return nullptr; // callers treat nullptr as terminated (same contract as timeout)
-        }
-        if (cr_res == std::cv_status::timeout) {
-            // Race-window: a send() may have landed a result between the
-            // wait_for expiring and us re-acquiring the lock. Drain once
-            // more before giving up, otherwise the caller sees a spurious
-            // timeout for a task whose result is already in the queue.
-            for (int i = 0; i < (int) queue_results.size(); i++) {
-                if (id_tasks.find(queue_results[i]->id) != id_tasks.end()) {
-                    server_task_result_ptr res = std::move(queue_results[i]);
-                    queue_results.erase(queue_results.begin() + i);
-                    return res;
-                }
-            }
-            return nullptr;
-        }
+    auto waiter = find_waiter(mutex_map, task_waiters, id_tasks);
+    if (!waiter) {
+        return nullptr;
     }
+
+    std::unique_lock<std::mutex> lock(waiter->mutex);
+    if (!waiter->results.empty()) {
+        server_task_result_ptr res = std::move(waiter->results.front());
+        waiter->results.erase(waiter->results.begin());
+        return res;
+    }
+
+    waiter->cv.wait_for(lock, std::chrono::milliseconds(timeout_ms),
+                         [&]{ return !running.load() || !waiter->results.empty(); });
+
+    if (!waiter->results.empty()) {
+        server_task_result_ptr res = std::move(waiter->results.front());
+        waiter->results.erase(waiter->results.begin());
+        return res;
+    }
+    if (!running.load()) {
+        RES_DBG("%s : queue result stop (graceful)\n", __func__);
+    }
+    return nullptr; // timed out (or terminated with nothing pending) — same contract as before
 }
 
 server_task_result_ptr server_response::recv(int id_task) {
@@ -342,21 +336,44 @@ server_task_result_ptr server_response::recv(int id_task) {
 void server_response::send(server_task_result_ptr && result) {
     RES_DBG("sending result for task id = %d\n", result->id);
 
-    std::unique_lock<std::mutex> lock(mutex_results);
-    for (const auto & id_task : waiting_task_ids) {
-        if (result->id == id_task) {
-            RES_DBG("task id = %d pushed to result queue\n", result->id);
-
-            queue_results.emplace_back(std::move(result));
-            condition_results.notify_all();
+    std::shared_ptr<task_waiter> waiter;
+    {
+        std::unique_lock<std::mutex> lock(mutex_map);
+        auto it = task_waiters.find(result->id);
+        if (it == task_waiters.end()) {
+            // No one waiting (already removed/cancelled) — drop, same as
+            // the old code silently not finding `result->id` in the set.
             return;
         }
+        waiter = it->second;
     }
+
+    {
+        std::unique_lock<std::mutex> lock(waiter->mutex);
+        waiter->results.emplace_back(std::move(result));
+    }
+    // Targeted wake: only the (typically one) thread blocked on THIS
+    // waiter's condition_variable is notified — not every in-flight
+    // request's thread, which was the thundering-herd bottleneck.
+    waiter->cv.notify_one();
 }
 
 void server_response::terminate() {
     running = false;
-    condition_results.notify_all();
+
+    std::vector<std::shared_ptr<task_waiter>> waiters;
+    {
+        std::unique_lock<std::mutex> lock(mutex_map);
+        waiters.reserve(task_waiters.size());
+        for (const auto & [id, w] : task_waiters) {
+            waiters.push_back(w);
+        }
+    }
+    // Shutdown is rare (once per server lifetime) — an O(waiters) fan-out
+    // here is fine, unlike doing it on the hot path in send().
+    for (const auto & w : waiters) {
+        w->cv.notify_all();
+    }
 }
 
 //

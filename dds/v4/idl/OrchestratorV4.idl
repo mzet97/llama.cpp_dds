@@ -42,9 +42,10 @@ module dds_llm_orchestrator {
 
     // @topic
     struct Task {
-        string task_id;
+        @key string task_id;
         string client_id;
         string assigned_agent;
+        string target_agent;
         long   model_required;     // ModelSpecialization
         string model_name;
         string messages_json;       // bounded em CDR pelo gerador
@@ -60,8 +61,14 @@ module dds_llm_orchestrator {
         unsigned long long deadline_ns;
         unsigned long retry_count;
         string finish_reason;
+        // Instrumentacao de latencia (espelha dds_types.py — alinhado em 2026-07-17)
+        unsigned long long t_serialization_ns;
+        unsigned long long t_transport_send_ns;
+        unsigned long long t_agent_queue_ns;
+        unsigned long long t_inference_ns;
+        unsigned long long t_transport_return_ns;
+        unsigned long long t_deserialization_ns;
     };
-    #pragma keylist Task task_id
 
     // ============================================================
     // Topico AgentRegistry
@@ -75,7 +82,7 @@ module dds_llm_orchestrator {
 
     // @topic
     struct AgentState {
-        string agent_id;
+        @key string agent_id;
         string hostname;
         string model;
         string specialization;
@@ -90,7 +97,6 @@ module dds_llm_orchestrator {
         unsigned long long last_update_ns;
         unsigned long long uptime_seconds;
     };
-    #pragma keylist AgentState agent_id
 
     // ============================================================
     // Topico TaskOutput
@@ -107,14 +113,15 @@ module dds_llm_orchestrator {
     // @topic
     // Nota: 'sequence' e palavra reservada em IDL — usar seq_num.
     struct TaskOutput {
-        string task_id;
-        unsigned long seq_num;
+        @key string task_id;
+        @key unsigned long seq_num;
         string content;
         boolean is_final;
         long   finish_reason;      // FinishReason
+        string agent_id;
+        unsigned long token_count;
         unsigned long long emitted_at_ns;
     };
-    #pragma keylist TaskOutput task_id seq_num
 
     // ============================================================
     // Topico SystemMetrics
@@ -129,13 +136,152 @@ module dds_llm_orchestrator {
 
     // @topic
     struct SystemMetric {
-        string metric_name;
-        string component_id;
+        @key string metric_name;
+        @key string component_id;
         long   component_type;     // ComponentType
-        double value;
+        float  value;
         string unit;
         unsigned long long timestamp_ns;
     };
-    #pragma keylist SystemMetric metric_name component_id
+
+    // ============================================================
+    // Tipos de plataforma (espelham dds_types.py — adicionados em 2026-07-17)
+    // Ordem de campos e tipos DEVEM bater com o Python para TypeIds iguais.
+    // ============================================================
+
+    // @topic QoS.RoutingProfile
+    struct QoSRoutingProfile {
+        @key string profile_id;
+        long   version;
+        string profile_name;
+        string preferred_agent_prefix;
+        string allowed_agent_prefixes_json;
+        string weights_json;
+        long   fallback_after_ms;
+        float  centroid_score;
+        string explanation_json;
+        unsigned long long timestamp_ns;
+    };
+
+    // @topic Context.Snapshot
+    struct ContextSnapshot {
+        @key string context_id;
+        string client_id;
+        string session_id;
+        string messages_json;
+        string metadata_json;
+        long   security_level;
+        unsigned long long created_at_ns;
+        unsigned long long updated_at_ns;
+        unsigned long ttl_seconds;
+    };
+
+    // @topic Context.Update
+    struct ContextUpdate {
+        @key string context_id;
+        long   update_type;
+        string messages_delta_json;
+        string metadata_delta_json;
+        unsigned long long updated_at_ns;
+    };
+
+    // @topic ToolCall.Request
+    struct ToolCallRequest {
+        @key string call_id;
+        string request_id;
+        string tool_name;
+        string arguments_json;
+        long   security_level;
+        long   status;
+        string result_json;
+        string error_message;
+        unsigned long long created_at_ns;
+        unsigned long long completed_at_ns;
+    };
+
+    // @topic Execution.Trace
+    struct ExecutionTraceEvent {
+        @key string trace_id;
+        @key unsigned long seq_num;
+        long   event_type;
+        string task_id;
+        string request_id;
+        string agent_id;
+        string component_id;
+        long   component_type;
+        string payload_json;
+        unsigned long long timestamp_ns;
+    };
+
+    // @topic Security.PolicySnapshot
+    struct SecurityPolicySnapshot {
+        @key string policy_id;
+        long   version;
+        string policy_json;
+        string published_by;
+        unsigned long long timestamp_ns;
+    };
+
+    // @topic Security.PolicyUpdate
+    struct SecurityPolicyUpdate {
+        @key string policy_id;
+        long   previous_version;
+        long   new_version;
+        string operation;
+        string rule_delta_json;
+        string published_by;
+        unsigned long long timestamp_ns;
+    };
+
+    // @topic QoS.Metric
+    struct QoSMetric {
+        @key string metric_id;
+        string metric_name;
+        string component;
+        long long value;
+        long   delta;
+        long   window_ms;
+        unsigned long long timestamp_ns;
+        string experiment_id;
+        string run_id;
+        string qos_profile;
+        string load_level;
+        string network_condition;
+        string payload_level;
+        long   replication_idx;
+        boolean warmup;
+    };
+
+    // @topic QoS.Violation
+    struct QoSViolation {
+        @key string violation_id;
+        string violation_type;
+        string topic_name;
+        string component;
+        string entity_kind;
+        string affected_entity;
+        string severity;
+        string details_json;
+        unsigned long long timestamp_ns;
+        string experiment_id;
+        string run_id;
+        string qos_profile;
+        string load_level;
+        string network_condition;
+        string payload_level;
+        long   replication_idx;
+        boolean warmup;
+    };
+
+    // @topic QoS.Discovery
+    struct DiscoveryEvent {
+        @key string event_id;
+        string event_type;
+        string topic_name;
+        string local_entity;
+        string remote_entity;
+        long   count_change;
+        unsigned long long timestamp_ns;
+    };
 
 };

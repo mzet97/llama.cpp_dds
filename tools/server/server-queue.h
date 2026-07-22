@@ -2,10 +2,13 @@
 
 #include "server-task.h"
 
+#include <atomic>
 #include <condition_variable>
 #include <deque>
+#include <memory>
 #include <mutex>
 #include <vector>
+#include <unordered_map>
 #include <unordered_set>
 
 // struct for managing server tasks
@@ -106,20 +109,35 @@ private:
     void cleanup_pending_task(int id_target);
 };
 
+// Per-task (or per-task-group, for server_response_reader::post_tasks) result
+// mailbox. `send()` looks up the ONE waiter registered for a given task id
+// and notifies only that waiter's own condition_variable — no other thread
+// blocked in recv()/recv_with_timeout_ms() for a *different* task is ever
+// woken. This replaces a single shared mutex+condition_variable that every
+// waiting thread (DDS/gRPC poll workers, HTTP request handlers) blocked on:
+// under N concurrent in-flight requests, EVERY generated token woke up all N
+// threads via notify_all() (each re-locking the shared mutex, scanning the
+// shared result vector, and going back to sleep having found nothing) —
+// measured to cap throughput via CPU-side lock contention well before GPU
+// saturation, independent of transport (DDS or HTTP hit the same ceiling).
+struct task_waiter {
+    std::mutex mutex;
+    std::condition_variable cv;
+    std::vector<server_task_result_ptr> results;
+};
+
 // struct for managing server responses
 // in most cases, use server_response_reader to retrieve results
 struct server_response {
 private:
-    bool running = true;
+    std::atomic<bool> running{true};
 
-    // for keeping track of all tasks waiting for the result
-    std::unordered_set<int> waiting_task_ids;
-
-    // the main result queue (using ptr for polymorphism)
-    std::vector<server_task_result_ptr> queue_results;
-
-    std::mutex mutex_results;
-    std::condition_variable condition_results;
+    // Maps each task id to the (possibly shared, for post_tasks()'s task
+    // groups) waiter registered for it. Only this map is protected by
+    // `mutex_map` — actual result delivery/waiting uses each waiter's own
+    // mutex/condition_variable, so unrelated tasks never contend.
+    std::unordered_map<int, std::shared_ptr<task_waiter>> task_waiters;
+    std::mutex mutex_map;
 
 public:
     // add the id_task to the list of tasks waiting for response

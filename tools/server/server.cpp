@@ -51,47 +51,59 @@ static std::atomic_flag         is_terminating = ATOMIC_FLAG_INIT;
 struct server_context;
 
 // Convert request to JSON for task creation (shared by DDS and gRPC)
+//
+// Namespace unificado (correção de arquitetura, R4): `ChatCompletionRequest`
+// era um struct próprio (LlamaDDS.idl, `sequence<ChatMessage> messages`,
+// `top_p`/`stop` opcionais) até `dds_types.h` virar
+// `using ChatCompletionRequest = LLMInferenceRequest;` (OrchestratorDDS.idl —
+// unificação com o namespace do orquestrador). Esta função nunca foi
+// atualizada para o tipo novo, e não compilava (`request.model`/`.messages`/
+// `.top_p`/`.stop`/`.prompt_tokens` etc. não existem em `LLMInferenceRequest`
+// — só `model_name`/`messages_json` [string JSON já no formato OpenAI]).
+// Portado da árvore antiga (`src/llama_cpp`, já validada e rodando com GPU
+// real nesta sessão): `top_p`/`stop` não trafegam mais no wire unificado
+// (vêm dos defaults do servidor/params_base em vez disso).
 static json dds_request_to_json(const llama_dds::ChatCompletionRequest & dds_req, const std::string & model_name) {
     json data = json::object();
 
-    // Model
-    if (!dds_req.model.empty()) {
-        data["model"] = dds_req.model;
-    } else {
-        data["model"] = model_name;
-    }
+    data["model"] = dds_req.model_name.empty() ? model_name : dds_req.model_name;
 
-    // Messages (for chat completion)
-    if (!dds_req.messages.empty()) {
-        json messages = json::array();
-        for (const auto & msg : dds_req.messages) {
-            messages.push_back({
-                { "role",    msg.role    },
-                { "content", msg.content }
-            });
+    if (!dds_req.messages_json.empty()) {
+        try {
+            data["messages"] = json::parse(dds_req.messages_json);
+        } catch (const std::exception & ex) {
+            LOG_WRN("[DDS] messages_json invalido: %s\n", ex.what());
         }
-        data["messages"] = messages;
     }
 
-    // Sampling parameters
     if (dds_req.temperature > 0) {
         data["temperature"] = dds_req.temperature;
-    }
-    if (dds_req.top_p && *dds_req.top_p > 0 && *dds_req.top_p < 1.0) {
-        data["top_p"] = *dds_req.top_p;
     }
     if (dds_req.max_tokens > 0) {
         data["max_tokens"] = dds_req.max_tokens;
         data["n_predict"]  = dds_req.max_tokens;
     }
-    if (dds_req.stop && !dds_req.stop->empty()) {
-        data["stop"] = *dds_req.stop;
-    }
 
-    // Stream
     data["stream"] = dds_req.stream;
 
     return data;
+}
+
+// Extrai as mensagens de messages_json (formato OpenAI) para o fallback sem meta.
+static std::vector<llama_dds::ChatMessage> dds_parse_messages(const std::string & messages_json) {
+    std::vector<llama_dds::ChatMessage> out;
+    if (messages_json.empty()) {
+        return out;
+    }
+    try {
+        json arr = json::parse(messages_json);
+        for (const auto & m : arr) {
+            out.push_back({ m.value("role", std::string{}), m.value("content", std::string{}) });
+        }
+    } catch (const std::exception &) {
+        // deixa vazio; o chamador trata
+    }
+    return out;
 }
 
 // Helper function to convert request to server task and process it.
@@ -138,7 +150,7 @@ static void process_transport_request(BridgeT *                                b
         data                                = std::move(body_parsed);
     } else {
         // Fallback for router / model-less path
-        for (const auto & msg : dds_req.messages) {
+        for (const auto & msg : dds_parse_messages(dds_req.messages_json)) {
             if (msg.role == "system") {
                 prompt += "<|system|>\n" + msg.content + "<|end|>\n";
             } else if (msg.role == "user") {
@@ -169,10 +181,10 @@ static void process_transport_request(BridgeT *                                b
         LOG_ERR("%s Failed to tokenize prompt: %s\n", tag, ex.what());
         llama_dds::ChatCompletionResponse resp;
         resp.request_id    = dds_req.request_id;
-        resp.model         = dds_req.model.empty() ? model_name : dds_req.model;
+        resp.model_used    = dds_req.model_name.empty() ? model_name : dds_req.model_name;
         resp.content       = std::string(tag) + " Error: Failed to tokenize prompt: " + ex.what();
         resp.is_final      = true;
-        resp.finish_reason = "error";
+        resp.finish_reason = 4;  // FinishReason::ERROR (campo unificado e int32 — ver dds_types.h)
         bridge->send_response(resp);
         return;
     }
@@ -212,7 +224,9 @@ static void process_transport_request(BridgeT *                                b
     std::string generated_text;
     int         prompt_tokens     = 0;
     int         completion_tokens = 0;
-    std::string finish_reason     = "stop";
+    // finish_reason unificado com o Python: int32 FinishReason
+    // (0=NONE, 1=COMPLETION, 2=LENGTH, 3=TIMEOUT, 4=ERROR) — ver dds_types.h.
+    int32_t     finish_reason     = 1;  // COMPLETION
 
     // Keep receiving results until we get a final one or timeout
     auto      start_wait  = std::chrono::steady_clock::now();
@@ -256,13 +270,13 @@ static void process_transport_request(BridgeT *                                b
             // Determine finish reason
             switch (cmpl_final->stop) {
                 case STOP_TYPE_EOS:
-                    finish_reason = "stop";
+                    finish_reason = 1;  // COMPLETION
                     break;
                 case STOP_TYPE_LIMIT:
-                    finish_reason = "length";
+                    finish_reason = 2;  // LENGTH
                     break;
                 default:
-                    finish_reason = "stop";
+                    finish_reason = 1;  // COMPLETION
                     break;
             }
 
@@ -271,11 +285,11 @@ static void process_transport_request(BridgeT *                                b
                 if (!cmpl_final->content.empty()) {
                     llama_dds::ChatCompletionResponse chunk;
                     chunk.request_id        = dds_req.request_id;
-                    chunk.model             = dds_req.model.empty() ? model_name : dds_req.model;
+                    chunk.model_used        = dds_req.model_name.empty() ? model_name : dds_req.model_name;
                     chunk.content           = cmpl_final->content;
                     chunk.is_final          = false;
-                    chunk.prompt_tokens     = prompt_tokens;
-                    chunk.completion_tokens = completion_tokens;
+                    chunk.tokens_prompt     = prompt_tokens;
+                    chunk.tokens_completion = completion_tokens;
                     bridge->send_response(chunk);
                 }
                 generated_text = "";  // already streamed, nothing to send in final batch
@@ -299,11 +313,11 @@ static void process_transport_request(BridgeT *                                b
                     if (!cmpl_partial->content.empty()) {
                         llama_dds::ChatCompletionResponse chunk;
                         chunk.request_id        = dds_req.request_id;
-                        chunk.model             = dds_req.model.empty() ? model_name : dds_req.model;
+                        chunk.model_used        = dds_req.model_name.empty() ? model_name : dds_req.model_name;
                         chunk.content           = cmpl_partial->content;
                         chunk.is_final          = false;
-                        chunk.prompt_tokens     = prompt_tokens;
-                        chunk.completion_tokens = completion_tokens;
+                        chunk.tokens_prompt     = prompt_tokens;
+                        chunk.tokens_completion = completion_tokens;
                         bridge->send_response(chunk);
                         LOG_DBG("%s Streamed chunk: %zu chars (n_decoded=%d)\n", tag, cmpl_partial->content.size(),
                                 completion_tokens);
@@ -319,14 +333,14 @@ static void process_transport_request(BridgeT *                                b
                     } else if (!is_final) {
                         LOG_WRN("%s generated_text exceeded %zu bytes — truncating\n",
                                 tag, MAX_GENERATED_BYTES);
-                        finish_reason = "length";
+                        finish_reason = 2;  // LENGTH
                         is_final      = true;
                     }
                     LOG_DBG("%s Got partial: %zu chars total (n_decoded=%d)\n", tag, generated_text.size(),
                             completion_tokens);
 
                     if (!cmpl_partial->is_progress && completion_tokens >= dds_req.max_tokens) {
-                        finish_reason = "stop";
+                        finish_reason = 1;  // COMPLETION
                         LOG_DBG("%s Received full completion (%d tokens)\n", tag, completion_tokens);
                         is_final = true;
                     }
@@ -336,7 +350,7 @@ static void process_transport_request(BridgeT *                                b
                 auto * error_result = dynamic_cast<server_task_result_error *>(result.get());
                 if (error_result != nullptr) {
                     generated_text = "[Error: " + error_result->err_msg + "]";
-                    finish_reason  = "error";
+                    finish_reason  = 4;  // ERROR
                     LOG_ERR("%s Task error: %s\n", tag, error_result->err_msg.c_str());
                     is_final = true;
                 }
@@ -350,12 +364,12 @@ static void process_transport_request(BridgeT *                                b
     // for non-streaming it carries the complete generated text.
     llama_dds::ChatCompletionResponse resp;
     resp.request_id        = dds_req.request_id;
-    resp.model             = dds_req.model.empty() ? model_name : dds_req.model;
+    resp.model_used        = dds_req.model_name.empty() ? model_name : dds_req.model_name;
     resp.content           = generated_text;  // empty for streaming (chunks already sent)
     resp.is_final          = true;
     resp.finish_reason     = finish_reason;
-    resp.prompt_tokens     = prompt_tokens;
-    resp.completion_tokens = completion_tokens;
+    resp.tokens_prompt     = prompt_tokens;
+    resp.tokens_completion = completion_tokens;
 
     bridge->send_response(resp);
 
@@ -368,10 +382,10 @@ static void process_transport_request(BridgeT *                                b
         // Ensure pending count is decremented via a final error response
         llama_dds::ChatCompletionResponse err_resp;
         err_resp.request_id    = dds_req.request_id;
-        err_resp.model         = model_name;
+        err_resp.model_used    = model_name;
         err_resp.content       = std::string(tag) + " Internal error: " + ex.what();
         err_resp.is_final      = true;
-        err_resp.finish_reason = "error";
+        err_resp.finish_reason = 4;  // FinishReason::ERROR
         bridge->send_response(err_resp);
         // Mirror the success-path cleanup: without this, every failed request
         // leaks one entry in server_response::waiting_task_ids. Guard on
