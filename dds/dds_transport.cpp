@@ -193,6 +193,7 @@ class DDSTransportImpl {
         // Zero out handles so they aren't reused after deletion.
         response_writer_ = error_writer_ = status_writer_ = request_reader_ = 0;
         request_writer_ = response_reader_ = status_reader_ = 0;
+        error_reader_                                    = 0;
         request_topic_ = response_topic_ = error_topic_ = status_topic_ = 0;
 
         if (was_running) {
@@ -200,9 +201,9 @@ class DDSTransportImpl {
         }
     }
 
-    void send_response(const llama_dds::ChatCompletionResponse & response) {
+    bool send_response(const llama_dds::ChatCompletionResponse & response) {
         if (!running_.load(std::memory_order_acquire) || response_writer_ <= 0) {
-            return;
+            return false;
         }
 
         std::lock_guard<std::mutex> lock(response_sequence_mutex_);
@@ -216,7 +217,7 @@ class DDSTransportImpl {
         auto data = to_llama_response(normalized);
         if (!data.request_id) {
             fprintf(stderr, "[DDS] OOM: cannot send response (allocation failed)\n");
-            return;
+            return false;
         }
         dds_return_t ret = dds_write(response_writer_, &data);
         free_llama_response(data);  // free strdup'd strings after dds_write
@@ -225,16 +226,18 @@ class DDSTransportImpl {
         }
         if (ret != DDS_RETCODE_OK) {
             fprintf(stderr, "[DDS] Error sending response: %d\n", ret);
+            return false;
         }
 #ifdef DDS_DEBUG
         fprintf(stderr, "[DDS] Sent response for request: %s, seq=%u\n", normalized.request_id.c_str(),
                 normalized.seq_num);
 #endif
+        return true;
     }
 
-    void send_error(const llama_dds::LLMInferenceError & error) {
+    bool send_error(const llama_dds::LLMInferenceError & error) {
         if (!running_.load(std::memory_order_acquire) || error_writer_ <= 0) {
-            return;
+            return false;
         }
 
         auto normalized = error;
@@ -246,13 +249,15 @@ class DDSTransportImpl {
         auto data = to_idl_error(normalized);
         if (!data.request_id) {
             fprintf(stderr, "[DDS] OOM: cannot send inference error (allocation failed)\n");
-            return;
+            return false;
         }
         dds_return_t ret = dds_write(error_writer_, &data);
         free_llm_error(data);
         if (ret != DDS_RETCODE_OK) {
             fprintf(stderr, "[DDS] Error sending inference error: %d\n", ret);
+            return false;
         }
+        return true;
     }
 
     void publish_status(const llama_dds::ServerStatus & status) {
@@ -276,7 +281,8 @@ class DDSTransportImpl {
     // Client mode (A1)
     //
     bool start_client(llama_dds::DDSTransport::ResponseCallback on_response,
-                      llama_dds::DDSTransport::StatusCallback   on_status) {
+                      llama_dds::DDSTransport::StatusCallback   on_status,
+                      llama_dds::DDSTransport::ErrorCallback    on_error) {
         try {
             participant_ = dds_create_participant(domain_id_, nullptr, nullptr);
             if (participant_ < 0) {
@@ -307,6 +313,10 @@ class DDSTransportImpl {
 
             request_writer_  = dds_create_writer(participant_, request_topic_, qos, nullptr);
 
+            // BRIDGE-STATE-013: o cliente C++ não tinha reader de Error —
+            // erros terminais publicados pela bridge eram invisíveis aqui.
+            error_reader_ = dds_create_reader(participant_, error_topic_, qos, nullptr);
+
             // DDS-QOS-004 / Gate C2: reader de Result usa o perfil profundo
             // (histórico global keyless de streaming) — casa com o
             // response_writer_ do servidor e com `profiles::llm_result()`.
@@ -335,7 +345,7 @@ class DDSTransportImpl {
             status_reader_ = dds_create_reader(participant_, status_topic_, status_qos, nullptr);
             dds_delete_qos(status_qos);
 
-            if (request_writer_ < 0 || response_reader_ < 0 || status_reader_ < 0) {
+            if (request_writer_ < 0 || response_reader_ < 0 || status_reader_ < 0 || error_reader_ < 0) {
                 fprintf(stderr, "[DDS Client] Failed to create reader/writer entities\n");
                 dds_delete(participant_); participant_ = 0;
                 return false;
@@ -343,6 +353,7 @@ class DDSTransportImpl {
 
             response_callback_ = std::move(on_response);
             status_callback_   = std::move(on_status);
+            error_callback_    = std::move(on_error);
             running_.store(true, std::memory_order_release);
 
             // Thread reads responses (and optionally status)
@@ -402,11 +413,17 @@ class DDSTransportImpl {
                 status_reader_ = 0;  // Prevent drain loop from trying
             }
         }
+        if (error_reader_ > 0) {
+            if (dds_waitset_attach(ws, error_reader_, DDS_DATA_AVAILABLE_STATUS) < 0) {
+                fprintf(stderr, "[DDS Client] Failed to attach error_reader_ to waitset; error updates disabled\n");
+                error_reader_ = 0;
+            }
+        }
 
-        dds_attach_t ws_results[2];
+        dds_attach_t ws_results[3];
 
         while (running_.load(std::memory_order_acquire)) {
-            dds_return_t rc = dds_waitset_wait(ws, ws_results, 2, DDS_MSECS(500));
+            dds_return_t rc = dds_waitset_wait(ws, ws_results, 3, DDS_MSECS(500));
             if (rc < 0) {
                 break;
             }
@@ -447,6 +464,24 @@ class DDSTransportImpl {
                         }
                     }
                     dds_return_loan(status_reader_, samples, n);
+                }
+            }
+            // Drain all available error samples (LLM.InferenceError)
+            if (error_reader_ > 0 && error_callback_) {
+                while (true) {
+                    void *            samples[1] = { nullptr };
+                    dds_sample_info_t infos[1];
+                    dds_return_t      n = dds_take(error_reader_, samples, infos, 1, 1);
+                    if (n <= 0) break;
+                    if (infos[0].valid_data) {
+                        auto * err = static_cast<orchestrator_LLMInferenceError *>(samples[0]);
+                        try {
+                            error_callback_(to_error(*err));
+                        } catch (const std::exception & e) {
+                            fprintf(stderr, "[DDS Client] error callback error: %s\n", e.what());
+                        }
+                    }
+                    dds_return_loan(error_reader_, samples, n);
                 }
             }
         }
@@ -552,6 +587,7 @@ class DDSTransportImpl {
     dds_entity_t request_writer_  = 0;
     dds_entity_t response_reader_ = 0;
     dds_entity_t status_reader_   = 0;
+    dds_entity_t error_reader_    = 0;
 
     std::thread reader_thread_;           // server read loop
     std::thread response_reader_thread_;  // client response loop (A1)
@@ -559,6 +595,7 @@ class DDSTransportImpl {
     llama_dds::DDSTransport::RequestCallback  request_callback_;
     llama_dds::DDSTransport::ResponseCallback response_callback_;  // client mode
     llama_dds::DDSTransport::StatusCallback   status_callback_;    // client mode
+    llama_dds::DDSTransport::ErrorCallback    error_callback_;     // client mode
 };
 
 // DDSTransport implementation
@@ -577,12 +614,12 @@ void DDSTransport::stop_server() {
     pimpl_->stop();
 }
 
-void DDSTransport::send_response(const llama_dds::ChatCompletionResponse & response) {
-    pimpl_->send_response(response);
+bool DDSTransport::send_response(const llama_dds::ChatCompletionResponse & response) {
+    return pimpl_->send_response(response);
 }
 
-void DDSTransport::send_error(const llama_dds::LLMInferenceError & error) {
-    pimpl_->send_error(error);
+bool DDSTransport::send_error(const llama_dds::LLMInferenceError & error) {
+    return pimpl_->send_error(error);
 }
 
 void DDSTransport::publish_status(const llama_dds::ServerStatus & status) {
@@ -595,7 +632,7 @@ bool DDSTransport::start_client() {
         return false;
     }
     is_server_ = false;
-    return pimpl_->start_client(response_callback_, status_callback_);
+    return pimpl_->start_client(response_callback_, status_callback_, error_callback_);
 }
 
 void DDSTransport::stop_client() {
@@ -616,6 +653,10 @@ void DDSTransport::subscribe_responses(llama_dds::DDSTransport::ResponseCallback
 
 void DDSTransport::subscribe_status(llama_dds::DDSTransport::StatusCallback on_status) {
     status_callback_ = std::move(on_status);
+}
+
+void DDSTransport::subscribe_errors(llama_dds::DDSTransport::ErrorCallback on_error) {
+    error_callback_ = std::move(on_error);
 }
 
 }  // namespace llama_dds

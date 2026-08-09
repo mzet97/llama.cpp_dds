@@ -9,6 +9,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace llama_dds {
 
@@ -49,6 +50,17 @@ class DDSBridgeImpl;
 ///       if (bridge.pop_pending_request(req)) { /* process */ }
 ///   }
 ///   bridge.stop();
+///
+/// Semântica de erro (BRIDGE-STATE-013)
+/// ------------------------------------
+/// Dois canais terminais coexistem, com propósitos distintos:
+///   - Erro DE INFERÊNCIA (exceção no processamento da request, template
+///     compartilhado DDS/gRPC): vai como LLMInferenceResult final com
+///     finish_reason=4 (ERROR) — o cliente que só lê Result continua vendo
+///     o desfecho no mesmo tópico do streaming.
+///   - Erro DE TRANSPORTE/PROTOCOLO (falha de conversão/parse no reader
+///     DDS): vai para o tópico LLM.InferenceError via send_error().
+/// Ambos passam por mark_terminal(): exatamente um deles libera o slot.
 class DDSBridge {
   public:
     DDSBridge(int domain_id = 0);
@@ -90,6 +102,9 @@ class DDSBridge {
     // Send a response (called by server after processing)
     void send_response(const ChatCompletionResponse & response);
 
+    /// Publish a terminal inference error and release its pending slot.
+    void send_error(const LLMInferenceError & error);
+
     /// Pop one request from the pending queue.
     /// Thread-safe: may be called from any thread concurrently with handle_request().
     /// Returns true and fills @p out_request when a request is available;
@@ -105,12 +120,26 @@ class DDSBridge {
     /// Returns true if at least one request is pending.  Thread-safe.
     bool has_pending_requests() const;
 
-    /// Decrement pending count for a request that failed before send_response(is_final=true).
-    /// Must be called exactly once per failed request to keep slot accounting correct.
-    void cancel_pending_request();
+    /// Release the pending slot of a request that failed before
+    /// send_response(is_final=true). Terminal-idempotent (BRIDGE-STATE-013):
+    /// only the FIRST terminal event of a request_id releases the slot —
+    /// duplicate terminal/cancel events are no-ops, so a late cancel can
+    /// never free capacity belonging to another request.
+    void cancel_pending_request(const std::string & request_id);
+
+    /// Nº de requests em voo (enfileiradas ou processando) — observabilidade
+    /// e testes da invariante "pending == conjunto de requests vivas".
+    int pending_count() const;
 
   private:
     void handle_request(const ChatCompletionRequest & request);
+
+    /// BRIDGE-STATE-013: registra o evento terminal do request_id.
+    /// Retorna true somente na PRIMEIRA transição terminal (resposta final,
+    /// erro ou cancelamento) — o chamador só decrementa o pending nesse caso.
+    /// Re-armado quando o mesmo request_id é enfileirado como request NOVA
+    /// (retry legítimo), em `handle_request`.
+    bool mark_terminal(const std::string & request_id);
 
     int domain_id_;
 
@@ -128,6 +157,12 @@ class DDSBridge {
     // order; the map provides O(1) dedup by request_id and fast cancel.
     std::deque<std::string>                                pending_order_;
     std::unordered_map<std::string, ChatCompletionRequest> pending_requests_;
+
+    // BRIDGE-STATE-013: ids com transição terminal já consumida (final/erro/
+    // cancel). Capado em 4096 com eviction FIFO — suficiente para distinguir
+    // terminal duplicado de retry legítimo sem crescer sem limite.
+    std::unordered_set<std::string> terminal_ids_;
+    std::deque<std::string>         terminal_order_;
 
     // pimpl_ MUST be declared LAST: its destructor joins threads that
     // access mutex_, cv_pending_, and pending_requests_ above.

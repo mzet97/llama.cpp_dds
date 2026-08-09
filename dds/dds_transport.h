@@ -20,7 +20,7 @@ class DDSTransportImpl;
 /// Threading model
 /// ---------------
 /// - start_server() / start_client() spawn internal threads (reader loop).
-/// - send_response(), publish_status(), and send_request() are safe to call
+/// - send_response(), send_error(), publish_status(), and send_request() are safe to call
 ///   from any thread after the respective start_*() call succeeds.
 /// - subscribe_responses() and subscribe_status() MUST be called before
 ///   start_client(); the callbacks are invoked from the internal reader thread.
@@ -39,6 +39,7 @@ class DDSTransport {
     using RequestCallback  = std::function<void(const ChatCompletionRequest &)>;
     using ResponseCallback = std::function<void(const ChatCompletionResponse &)>;
     using StatusCallback   = std::function<void(const ServerStatus &)>;
+    using ErrorCallback    = std::function<void(const LLMInferenceError &)>;
 
     DDSTransport(int domain_id = 0);
     ~DDSTransport();
@@ -62,7 +63,13 @@ class DDSTransport {
     void stop_server();
 
     /// Publish @p response on the response topic. Thread-safe.
-    void send_response(const ChatCompletionResponse & response);
+    /// Returns false when the dds_write fails (or the transport is down) —
+    /// BRIDGE-STATE-013: write failures must propagate, not just be logged.
+    bool send_response(const ChatCompletionResponse & response);
+
+    /// Publish a terminal inference error on the error topic. Thread-safe.
+    /// Returns false when the dds_write fails.
+    bool send_error(const LLMInferenceError & error);
 
     /// Publish a server heartbeat on the status topic. Thread-safe.
     void publish_status(const ServerStatus & status);
@@ -90,6 +97,11 @@ class DDSTransport {
     /// silently ignored if no callback is registered).
     void subscribe_status(StatusCallback on_status);
 
+    /// Register a callback invoked for each received LLM.InferenceError
+    /// (optional — BRIDGE-STATE-013: sem este reader o cliente C++ não
+    /// observava erros terminais publicados pela bridge).
+    void subscribe_errors(ErrorCallback on_error);
+
     /// @}
 
     /// Returns true while the reader thread is active.
@@ -106,6 +118,7 @@ class DDSTransport {
     // Callbacks stored here for subscribe_*() API; forwarded to impl on start.
     ResponseCallback response_callback_;
     StatusCallback   status_callback_;
+    ErrorCallback    error_callback_;
 };
 
 }  // namespace llama_dds

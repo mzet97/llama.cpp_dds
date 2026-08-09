@@ -395,7 +395,7 @@ static void process_transport_request(BridgeT *                                b
         }
     } catch (...) {
         LOG_ERR("%s Unknown exception processing request %s\n", tag, dds_req.request_id.c_str());
-        bridge->cancel_pending_request();
+        bridge->cancel_pending_request(dds_req.request_id);
         if (task_id != -1) {
             queue_results->remove_waiting_task_id(task_id);
         }
@@ -776,9 +776,16 @@ int main(int argc, char ** argv) {
         LOG_INF("%s: model loaded\n", __func__);
 
 #if defined(LLAMA_DDS)
-        // A3: inform DDS bridge of the loaded model so status is accurate
+        // A3: inform DDS bridge of the loaded model so status is accurate.
+        // Preferência: --alias (é o nome que os clientes usam — o filtro por
+        // modelo do DDSBridge compara request.model_name com este valor) >
+        // params.model.name (só preenchido em pulls docker/hf) > "unknown"
+        // (o filtro trata "unknown" como coringa e aceita tudo — deployments
+        // que quiserem isolamento por modelo DEVEM passar --alias).
         if (dds_bridge) {
-            std::string model_name_str = params.model.name.empty() ? "unknown" : params.model.name;
+            std::string model_name_str = !params.model_alias.empty() ? params.model_alias
+                                         : !params.model.name.empty() ? params.model.name
+                                                                      : "unknown";
             dds_bridge->set_model_info(model_name_str, true, params.n_parallel);
         }
 

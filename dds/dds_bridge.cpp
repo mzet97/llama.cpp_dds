@@ -88,7 +88,9 @@ class DDSBridgeImpl {
         transport_->publish_status(status);
     }
 
-    void send_response(const ChatCompletionResponse & response) { transport_->send_response(response); }
+    bool send_response(const ChatCompletionResponse & response) { return transport_->send_response(response); }
+
+    bool send_error(const LLMInferenceError & error) { return transport_->send_error(error); }
 
     // Update model name, readiness, and parallel-slot capacity for status publishing.
     void set_model_info(const std::string & model_name, bool ready, int n_parallel = 1) {
@@ -100,6 +102,8 @@ class DDSBridgeImpl {
 
     // Increment/decrement the count of in-flight requests, used for status reporting.
     void inc_pending() { pending_count_.fetch_add(1); }
+
+    int pending_count() const { return pending_count_.load(std::memory_order_acquire); }
 
     void dec_pending() {
         int old = pending_count_.load(std::memory_order_relaxed);
@@ -185,17 +189,55 @@ void DDSBridge::set_task_complete_callback(TaskCompleteCallback callback) {
 
 void DDSBridge::send_response(const ChatCompletionResponse & response) {
     if (pimpl_) {
-        if (response.is_final) {
-            pimpl_->dec_pending();  // only decrement when request is fully complete
+        // BRIDGE-STATE-013: decrementa só na PRIMEIRA transição terminal do
+        // request_id — um final duplicado não libera capacidade de outra
+        // request. O slot é liberado mesmo se o write falhar (a request
+        // terminou do ponto de vista do servidor; o cliente expira por
+        // timeout e a falha fica observável no log abaixo).
+        if (response.is_final && mark_terminal(response.request_id)) {
+            pimpl_->dec_pending();
         }
-        pimpl_->send_response(response);
+        if (!pimpl_->send_response(response)) {
+            fprintf(stderr, "[DDSBridge] dds_write falhou (request=%s, final=%d) — sem reenvio; o consumidor verá timeout/gap\n",
+                    response.request_id.c_str(), (int) response.is_final);
+        }
     }
 }
 
-void DDSBridge::cancel_pending_request() {
+void DDSBridge::send_error(const LLMInferenceError & error) {
     if (pimpl_) {
+        if (mark_terminal(error.request_id)) {
+            pimpl_->dec_pending();
+        }
+        if (!pimpl_->send_error(error)) {
+            fprintf(stderr, "[DDSBridge] dds_write de Error falhou (request=%s)\n",
+                    error.request_id.c_str());
+        }
+    }
+}
+
+void DDSBridge::cancel_pending_request(const std::string & request_id) {
+    if (pimpl_ && mark_terminal(request_id)) {
         pimpl_->dec_pending();
     }
+}
+
+int DDSBridge::pending_count() const {
+    return pimpl_ ? pimpl_->pending_count() : 0;
+}
+
+bool DDSBridge::mark_terminal(const std::string & request_id) {
+    static constexpr size_t MAX_TERMINAL_TRACKED = 4096;
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!terminal_ids_.insert(request_id).second) {
+        return false;  // terminal duplicado — no-op
+    }
+    terminal_order_.push_back(request_id);
+    if (terminal_order_.size() > MAX_TERMINAL_TRACKED) {
+        terminal_ids_.erase(terminal_order_.front());
+        terminal_order_.pop_front();
+    }
+    return true;
 }
 
 void DDSBridge::set_model_info(const std::string & model_name, bool ready, int n_parallel) {
@@ -205,6 +247,39 @@ void DDSBridge::set_model_info(const std::string & model_name, bool ready, int n
 }
 
 void DDSBridge::handle_request(const ChatCompletionRequest & request) {
+    // Filtro por modelo: o transporte real (DDSTransport::read_loop, ver
+    // dds_transport.cpp) entrega TODO request publicado no domain, sem
+    // ContentFilteredTopic nem checagem nenhuma — o isolamento entre
+    // instâncias de llama-server hoje é só CONVENÇÃO de deploy (domains
+    // distintos por servidor), não é garantido pelo código. Confirmado ao
+    // vivo nesta sessão: dois processos `llama-server` rodando no MESMO
+    // --dds-domain simultaneamente (achado real via SSH, ver
+    // OPTIMIZATION_REPORT.md) — sem este filtro, ambos processariam TODO
+    // request do domain em duplicado (trabalho de GPU desperdiçado, sem
+    // erro nem aviso). Este filtro também é o mecanismo CORRETO para
+    // múltiplos modelos legitimamente compartilhando um domain (cada
+    // servidor só atende o `model_name` que carregou). Se `model_loaded_`
+    // ainda não foi setado (startup, antes de `set_model_info()`), aceita
+    // tudo — preserva o comportamento atual da janela de inicialização.
+    // O filtro só age numa DIVERGÊNCIA POSITIVA entre dois nomes conhecidos:
+    // se o servidor não tem nome real ("" antes de set_model_info(), ou
+    // "unknown" quando roda sem --alias — ver server.cpp: params.model.name
+    // vazio vira "unknown"), ou se o request não declara modelo, aceita —
+    // senão um deploy sem alias dropava TODO request silenciosamente
+    // (pego pelo smoke test HIP local, Rodada 8).
+    {
+        std::lock_guard<std::mutex> lk(pimpl_->status_mutex_);
+        const std::string & loaded = pimpl_->model_loaded_;
+        if (!loaded.empty() && loaded != "unknown" && !request.model_name.empty() &&
+            loaded != request.model_name) {
+#ifdef DDS_DEBUG
+            fprintf(stderr, "[DDSBridge] request %s dropped: model=%s != loaded=%s\n",
+                    request.request_id.c_str(), request.model_name.c_str(), loaded.c_str());
+#endif
+            return;  // não é para este servidor — não enfileira, não conta pending
+        }
+    }
+
     // Store request for tracking (FIFO via pending_order_, lookup via map).
     // inc_pending() moved INSIDE this lock, gated on `inserted`: the previous
     // version incremented unconditionally before the dedup check below, with
@@ -226,6 +301,10 @@ void DDSBridge::handle_request(const ChatCompletionRequest & request) {
         auto [it, inserted] = pending_requests_.emplace(request.request_id, request);
         if (inserted) {
             pending_order_.push_back(request.request_id);
+            // Retry legítimo (mesmo request_id após terminal): rearma a
+            // transição terminal para que o novo final decremente o pending
+            // desta nova tentativa (BRIDGE-STATE-013).
+            terminal_ids_.erase(request.request_id);
             pimpl_->inc_pending();
         } else {
             // Duplicate request_id (re-delivery from TRANSIENT_LOCAL);
@@ -235,7 +314,7 @@ void DDSBridge::handle_request(const ChatCompletionRequest & request) {
     }
 
 #ifdef DDS_DEBUG
-    fprintf(stderr, "[DDSBridge] request queued: model=%s, request_id=%s\n", request.model.c_str(),
+    fprintf(stderr, "[DDSBridge] request queued: model=%s, request_id=%s\n", request.model_name.c_str(),
             request.request_id.c_str());
 #endif
 
