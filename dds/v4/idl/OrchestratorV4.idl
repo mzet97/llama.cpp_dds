@@ -37,7 +37,8 @@ module dds_llm_orchestrator {
     enum ModelSpecialization {
         MS_TEXT,
         MS_VISION,
-        MS_EMBEDDING
+        MS_EMBEDDING,
+        MS_TRANSCRIPTION
     };
 
     // @topic

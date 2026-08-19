@@ -6,8 +6,8 @@
   Cyclone DDS: V11.0.1
 
 *****************************************************************/
-#ifndef DDSC__TMP_T808_IDLC_OUTPUT_ORCHESTRATORV4_H_BA4BAFE390B1A65CFB7F022FA844ECBC
-#define DDSC__TMP_T808_IDLC_OUTPUT_ORCHESTRATORV4_H_BA4BAFE390B1A65CFB7F022FA844ECBC
+#ifndef DDSC__TMP_T808_IDLC_OUTPUT_ORCHESTRATORV4_H_0CFC2DBB02124DA2C44CD77FDE28A54D
+#define DDSC__TMP_T808_IDLC_OUTPUT_ORCHESTRATORV4_H_0CFC2DBB02124DA2C44CD77FDE28A54D
 
 #include "dds/ddsc/dds_public_impl.h"
 
@@ -41,7 +41,8 @@ typedef enum dds_llm_orchestrator_ModelSpecialization
 {
   dds_llm_orchestrator_MS_TEXT,
   dds_llm_orchestrator_MS_VISION,
-  dds_llm_orchestrator_MS_EMBEDDING
+  dds_llm_orchestrator_MS_EMBEDDING,
+  dds_llm_orchestrator_MS_TRANSCRIPTION
 } dds_llm_orchestrator_ModelSpecialization;
 
 #define dds_llm_orchestrator_ModelSpecialization__alloc() \
@@ -401,4 +402,4 @@ dds_sample_free ((d), &dds_llm_orchestrator_DiscoveryEvent_desc, (o))
 }
 #endif
 
-#endif /* DDSC__TMP_T808_IDLC_OUTPUT_ORCHESTRATORV4_H_BA4BAFE390B1A65CFB7F022FA844ECBC */
+#endif /* DDSC__TMP_T808_IDLC_OUTPUT_ORCHESTRATORV4_H_0CFC2DBB02124DA2C44CD77FDE28A54D */
