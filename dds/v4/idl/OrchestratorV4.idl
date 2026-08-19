@@ -189,6 +189,7 @@ module dds_llm_orchestrator {
     struct ToolCallRequest {
         @key string call_id;
         string request_id;
+        string requester_id;
         string tool_name;
         string arguments_json;
         long   security_level;
