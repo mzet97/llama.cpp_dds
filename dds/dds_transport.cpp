@@ -95,14 +95,15 @@ class DDSTransportImpl {
                 return false;
             }
 
-            // Create writer for responses — DDS-QOS-004 / Gate C2: perfil
-            // próprio, mais profundo. O histórico keyless de Result é GLOBAL
-            // e compartilhado por todos os chunks de todos os streams;
-            // KeepLast(10) perdia amostras sob burst (medido no microteste
-            // llm_result_backlog.rs: 108/128 perdidas com reader rápido).
-            // Deve casar com `profiles::llm_result()` (Rust) e
-            // `qos_llm_result()` (Python). History/ResourceLimits não são
-            // RxO — depth diferente por lado não quebra o matching.
+            // Create writer for responses — DDS-QOS-004 / Gate C2 +
+            // T-850-03/D4: perfil próprio, mais profundo. O histórico
+            // keyless de Result é GLOBAL e compartilhado por todos os
+            // chunks de todos os streams; KeepLast(8/10) perdia amostras
+            // sob burst (medido no microteste llm_result_backlog.rs:
+            // 108/128 perdidas com reader rápido). Deve casar com
+            // `profiles::llm_result()` (Rust) e `qos_llm_result()`
+            // (Python). History/ResourceLimits não são RxO — depth
+            // diferente por lado não quebra o matching.
             dds_qos_t * result_qos = dds_create_qos();
             dds_qset_reliability(result_qos, DDS_RELIABILITY_RELIABLE, DDS_SECS(10));
             dds_qset_durability(result_qos, DDS_DURABILITY_TRANSIENT_LOCAL);
@@ -209,10 +210,12 @@ class DDSTransportImpl {
         std::lock_guard<std::mutex> lock(response_sequence_mutex_);
         auto                       normalized = response;
         normalized.seq_num = next_response_sequence_[normalized.request_id]++;
-        normalized.emitted_at_ns = static_cast<uint64_t>(
-            std::chrono::duration_cast<std::chrono::nanoseconds>(
-                std::chrono::system_clock::now().time_since_epoch())
-                .count());
+        // T-850-04 (achado D): carimbo por amostra (parcial E final), ns
+        // desde a época UNIX via dds_time() (CycloneDDS C API) — antes o
+        // campo ficava a 0 ("emitted_at_ns nunca setado no C++"). Feito no
+        // choke point do transporte para cobrir todos os sites de
+        // construção do server.cpp (chunks parciais, chunk final, erros).
+        normalized.emitted_at_ns = static_cast<uint64_t>(dds_time());
 
         auto data = to_llama_response(normalized);
         if (!data.request_id) {
@@ -241,10 +244,9 @@ class DDSTransportImpl {
         }
 
         auto normalized = error;
-        normalized.emitted_at_ns = static_cast<uint64_t>(
-            std::chrono::duration_cast<std::chrono::nanoseconds>(
-                std::chrono::system_clock::now().time_since_epoch())
-                .count());
+        // T-850-04: mesmo carimbo de emitted_at_ns do send_response (ns
+        // desde a época UNIX, dds_time()).
+        normalized.emitted_at_ns = static_cast<uint64_t>(dds_time());
 
         auto data = to_idl_error(normalized);
         if (!data.request_id) {

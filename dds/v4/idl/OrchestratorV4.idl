@@ -2,7 +2,7 @@
 // Tipos canonicos do espaco de dados v4 do DDS-LLM-Orchestrator.
 //
 // Espelha (em C/C++) os tipos definidos em
-// dds_orchestrator_v4/dds_backend/dds_types.py de modo binario-compativel
+// src/orchestrator/dds_backend/dds_types.py de modo binario-compativel
 // (mesma serializacao CDR, mesmas chaves).
 //
 // Compilar com:
@@ -28,17 +28,32 @@ module dds_llm_orchestrator {
         TS_FAILED      // 4 - falhou apos esgotar tentativas
     };
 
+    // D7 (T-850-01): CONVENCAO DE WIRE para `Task.priority` — o campo e um
+    // `long` cru que carrega a ESCALA DA APLICACAO 1/5/10, NAO os ordinais
+    // 0/1/2 do enum `TaskPriority` abaixo. Enum IDL 4.2 nao pode carregar os
+    // valores explicitos, entao as consts documentais abaixo fixam a escala
+    // e tornam este IDL a fonte da verdade que resolve a divergencia D7
+    // (espelhadas em orch-common::TaskPriority e models.py::TaskPriority).
+    const long TASK_PRIORITY_LOW = 1;
+    const long TASK_PRIORITY_NORMAL = 5;
+    const long TASK_PRIORITY_HIGH = 10;
+
+    // Enum apenas nominal (ordinais 0/1/2); o wire usa as consts acima.
     enum TaskPriority {
-        TP_LOW,        // 1
-        TP_NORMAL,     // 5
-        TP_HIGH        // 10
+        TP_LOW,        // ordinal 0 -> wire: TASK_PRIORITY_LOW    (1)
+        TP_NORMAL,     // ordinal 1 -> wire: TASK_PRIORITY_NORMAL (5)
+        TP_HIGH        // ordinal 2 -> wire: TASK_PRIORITY_HIGH   (10)
     };
 
+    // Ordinais canonicos (T-850-01): MS_TEXT=0, MS_VISION=1, MS_EMBEDDING=2,
+    // MS_TRANSCRIPTION=3 — batem com orch-common::ModelSpecialization
+    // (Transcription = 3, agente Whisper) e models.py::ModelSpecialization.
+    // `Task.model_required` e `long` cru no wire carregando esses valores.
     enum ModelSpecialization {
-        MS_TEXT,
-        MS_VISION,
-        MS_EMBEDDING,
-        MS_TRANSCRIPTION
+        MS_TEXT,          // 0
+        MS_VISION,        // 1
+        MS_EMBEDDING,     // 2
+        MS_TRANSCRIPTION  // 3
     };
 
     // @topic
