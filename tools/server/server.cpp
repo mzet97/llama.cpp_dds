@@ -235,6 +235,13 @@ static void process_transport_request(BridgeT *                                b
     LOG_DBG("%s Waiting for result (stream=%d)...\n", tag, (int) dds_req.stream);
 
     std::string generated_text;
+    // O-1 (paridade HTTP): estado por-request para separar reasoning de
+    // content no publish DDS usando a MESMA maquinaria do endpoint HTTP
+    // (task_result_state::update_chat_msg). Sem isto, modelos reasoning
+    // (gemma4) publicam o canal de pensamento `<|channel>thought` DENTRO do
+    // content — paridade 0/20 vs HttpEngine medida em 2026-10-18.
+    task_result_state cmpl_state{chat_session};
+    bool              chat_split_active = false;  // algum diff de content já visto
     int         prompt_tokens     = 0;
     int         completion_tokens = 0;
     // finish_reason unificado com o Python: int32 FinishReason
@@ -293,21 +300,36 @@ static void process_transport_request(BridgeT *                                b
                     break;
             }
 
-            if (dds_req.stream) {
-                // A2: streaming — send the last chunk (may have remaining content)
-                if (!cmpl_final->content.empty()) {
-                    llama_dds::ChatCompletionResponse chunk;
-                    chunk.request_id        = dds_req.request_id;
-                    chunk.model_used        = dds_req.model_name.empty() ? model_name : dds_req.model_name;
-                    chunk.content           = cmpl_final->content.text;
-                    chunk.is_final          = false;
-                    chunk.tokens_prompt     = prompt_tokens;
-                    chunk.tokens_completion = completion_tokens;
-                    bridge->send_response(chunk);
+            // O-1 (paridade): o final também passa pelo update_chat_msg — os
+            // diffs do final carregam o conteúdo remanescente (stream) e o
+            // state acumula a mensagem completa limpa (non-stream).
+            cmpl_final->update(cmpl_state);
+            {
+                std::string final_delta;
+                for (const auto & d : cmpl_final->oaicompat_msg_diffs) final_delta += d.content_delta;
+                if (!final_delta.empty()) chat_split_active = true;
+
+                if (dds_req.stream) {
+                    // A2: streaming — send the last chunk (may have remaining content)
+                    if (!final_delta.empty()) {
+                        llama_dds::ChatCompletionResponse chunk;
+                        chunk.request_id        = dds_req.request_id;
+                        chunk.model_used        = dds_req.model_name.empty() ? model_name : dds_req.model_name;
+                        chunk.content           = final_delta;
+                        chunk.is_final          = false;
+                        chunk.tokens_prompt     = prompt_tokens;
+                        chunk.tokens_completion = completion_tokens;
+                        bridge->send_response(chunk);
+                    }
+                    generated_text = "";  // already streamed, nothing to send in final batch
+                } else {
+                    generated_text = cmpl_state.chat_msg.content;
+                    // Fallback: modelo/template sem split reasoning/content —
+                    // nunca produziu diff de content, mas há texto bruto.
+                    if (generated_text.empty() && !cmpl_final->content.text.empty() && !chat_split_active) {
+                        generated_text = cmpl_final->content.text;
+                    }
                 }
-                generated_text = "";  // already streamed, nothing to send in final batch
-            } else {
-                generated_text = cmpl_final->content.text;
             }
 
             LOG_DBG("%s Got FINAL completion: %d prompt tokens, %d completion tokens\n", tag, prompt_tokens,
@@ -321,18 +343,25 @@ static void process_transport_request(BridgeT *                                b
                 prompt_tokens     = cmpl_partial->n_prompt_tokens;
                 completion_tokens = cmpl_partial->n_decoded;
 
+                // O-1 (paridade): diffs do estado por-request — só o CONTENT
+                // delta vira chunk DDS (o reasoning do gemma4 fica fora).
+                cmpl_partial->update(cmpl_state);
+                std::string content_delta;
+                for (const auto & d : cmpl_partial->oaicompat_msg_diffs) content_delta += d.content_delta;
+                if (!content_delta.empty()) chat_split_active = true;
+
                 if (dds_req.stream) {
                     // A2: streaming — publish each partial chunk immediately as a DDS sample
-                    if (!cmpl_partial->content.empty()) {
+                    if (!content_delta.empty()) {
                         llama_dds::ChatCompletionResponse chunk;
                         chunk.request_id        = dds_req.request_id;
                         chunk.model_used        = dds_req.model_name.empty() ? model_name : dds_req.model_name;
-                        chunk.content           = cmpl_partial->content.text;
+                        chunk.content           = content_delta;
                         chunk.is_final          = false;
                         chunk.tokens_prompt     = prompt_tokens;
                         chunk.tokens_completion = completion_tokens;
                         bridge->send_response(chunk);
-                        LOG_DBG("%s Streamed chunk: %zu chars (n_decoded=%d)\n", tag, cmpl_partial->content.size(),
+                        LOG_DBG("%s Streamed chunk: %zu chars (n_decoded=%d)\n", tag, content_delta.size(),
                                 completion_tokens);
                     }
                 } else {
@@ -342,7 +371,9 @@ static void process_transport_request(BridgeT *                                b
                     // we just stop appending).
                     static constexpr size_t MAX_GENERATED_BYTES = 4 * 1024 * 1024;  // 4 MB
                     if (generated_text.size() < MAX_GENERATED_BYTES) {
-                        generated_text += cmpl_partial->content.text;
+                        // O-1 (paridade): acumula apenas o delta LIMPO do chat
+                        // split (o final sobrescreve com o state completo).
+                        generated_text += content_delta;
                     } else if (!is_final) {
                         LOG_WRN("%s generated_text exceeded %zu bytes — truncating\n",
                                 tag, MAX_GENERATED_BYTES);
