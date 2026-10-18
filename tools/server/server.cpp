@@ -20,6 +20,7 @@
 #    include "nlohmann/json.hpp"
 #    include "nlohmann/json_fwd.hpp"
 #    include "server-queue.h"
+#    include "server-schema.h"
 #    include "server-task.h"
 #endif
 
@@ -149,12 +150,13 @@ static void process_transport_request(BridgeT *                                b
     // Falls back to a hardcoded Phi template only when meta is unavailable
     // (e.g., router mode before a model is loaded).
     std::string prompt;
+    common_chat_session chat_session;
     if (meta != nullptr) {
         // Use oaicompat_chat_params_parse which picks the correct template
         // registered for the loaded model (Phi, Llama-3, Mistral, etc.).
         std::vector<raw_buffer> files;
         // data is already `json` (nlohmann::ordered_json), so it binds directly to json& body
-        json                    body_parsed = oaicompat_chat_params_parse(data, meta->chat_params, files);
+        json                    body_parsed = oaicompat_chat_params_parse(vocab, data, meta->chat_params, files, chat_session);
         prompt                              = body_parsed.value("prompt", std::string{});
         // Propagate parsed body so params_from_json_cmpl sees all fields
         data                                = std::move(body_parsed);
@@ -182,7 +184,7 @@ static void process_transport_request(BridgeT *                                b
     // or explicitly set in the fallback branch above.
     server_tokens tok_result;
     try {
-        auto tok_vec = tokenize_input_prompts(vocab, nullptr, data.at("prompt"), true, true);
+        auto tok_vec = tokenize_input_prompts(vocab, nullptr, data.at("prompt"), true, true, mtmd_helper_init_opt_default());
         if (tok_vec.empty()) {
             throw std::runtime_error("tokenize_input_prompts returned empty vector");
         }
@@ -210,7 +212,8 @@ static void process_transport_request(BridgeT *                                b
     // C5: Use proper server pipeline to configure ALL sampling params.
     // Falls back to minimal manual params if meta/params_base are unavailable.
     if (meta != nullptr && params_base != nullptr) {
-        task.params = server_task::params_from_json_cmpl(vocab, *params_base, meta->slot_n_ctx, data);
+        task.params = server_schema::eval_llama_cmpl_schema(vocab, *params_base, meta->logit_bias_eog, data);
+        task.apply_chat_session(chat_session);
     } else {
         task.params.n_predict     = dds_req.max_tokens > 0 ? dds_req.max_tokens : 50;
         task.params.sampling.temp = dds_req.temperature > 0 ? dds_req.temperature : 0.7f;
@@ -296,7 +299,7 @@ static void process_transport_request(BridgeT *                                b
                     llama_dds::ChatCompletionResponse chunk;
                     chunk.request_id        = dds_req.request_id;
                     chunk.model_used        = dds_req.model_name.empty() ? model_name : dds_req.model_name;
-                    chunk.content           = cmpl_final->content;
+                    chunk.content           = cmpl_final->content.text;
                     chunk.is_final          = false;
                     chunk.tokens_prompt     = prompt_tokens;
                     chunk.tokens_completion = completion_tokens;
@@ -304,7 +307,7 @@ static void process_transport_request(BridgeT *                                b
                 }
                 generated_text = "";  // already streamed, nothing to send in final batch
             } else {
-                generated_text = cmpl_final->content;
+                generated_text = cmpl_final->content.text;
             }
 
             LOG_DBG("%s Got FINAL completion: %d prompt tokens, %d completion tokens\n", tag, prompt_tokens,
@@ -324,7 +327,7 @@ static void process_transport_request(BridgeT *                                b
                         llama_dds::ChatCompletionResponse chunk;
                         chunk.request_id        = dds_req.request_id;
                         chunk.model_used        = dds_req.model_name.empty() ? model_name : dds_req.model_name;
-                        chunk.content           = cmpl_partial->content;
+                        chunk.content           = cmpl_partial->content.text;
                         chunk.is_final          = false;
                         chunk.tokens_prompt     = prompt_tokens;
                         chunk.tokens_completion = completion_tokens;
@@ -339,7 +342,7 @@ static void process_transport_request(BridgeT *                                b
                     // we just stop appending).
                     static constexpr size_t MAX_GENERATED_BYTES = 4 * 1024 * 1024;  // 4 MB
                     if (generated_text.size() < MAX_GENERATED_BYTES) {
-                        generated_text += cmpl_partial->content;
+                        generated_text += cmpl_partial->content.text;
                     } else if (!is_final) {
                         LOG_WRN("%s generated_text exceeded %zu bytes — truncating\n",
                                 tag, MAX_GENERATED_BYTES);

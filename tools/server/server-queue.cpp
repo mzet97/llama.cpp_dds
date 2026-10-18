@@ -520,14 +520,26 @@ void server_response::send(server_task_result_ptr && result) {
 }
 
 void server_response::broadcast(server_task_result_ptr && result) {
-    std::unique_lock<std::mutex> lock(mutex_results);
-    for (const auto & id_task : waiting_task_ids) {
+    // waiter-mailbox version of upstream broadcast(): clone per waiting task
+    // and deliver only to that task's waiter (see task_waiter above).
+    std::vector<std::pair<int, std::shared_ptr<task_waiter>>> targets;
+    {
+        std::unique_lock<std::mutex> lock(mutex_map);
+        targets.reserve(task_waiters.size());
+        for (const auto & [id_task, w] : task_waiters) {
+            targets.emplace_back(id_task, w);
+        }
+    }
+    for (const auto & [id_task, w] : targets) {
         RES_DBG("task id = %d pushed to result queue\n", id_task);
         server_task_result_ptr res_copy(result->clone());
         res_copy->id = id_task; // override id with target task id
-        queue_results.emplace_back(std::move(res_copy));
+        {
+            std::unique_lock<std::mutex> lock(w->mutex);
+            w->results.emplace_back(std::move(res_copy));
+        }
+        w->cv.notify_one();
     }
-    condition_results.notify_all();
 }
 
 void server_response::terminate() {
